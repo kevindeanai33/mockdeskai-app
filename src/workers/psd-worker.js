@@ -15,6 +15,8 @@ initializeCanvas(
 
 let activePsd = null;
 let undoStack = [];
+// Track layers whose text has been modified (need re-rendering in composite)
+const modifiedTextLayers = new Set();
 
 self.onmessage = async (e) => {
   const msg = e.data;
@@ -45,6 +47,7 @@ function handleParse(msg) {
 
   undoStack = [];
   layerIndex = new Map();
+  modifiedTextLayers.clear();
   buildLayerIndex(activePsd.children || []);
   const layers = extractLayerInfo(activePsd.children || []);
   const composite = renderComposite();
@@ -76,8 +79,16 @@ function handleEdit(msg) {
   switch (command.action) {
     case 'set_text': {
       if (!layer.text) throw new Error(`Layer '${layerKey}' is not a text layer`);
-      undoStack.push({ type: 'text', layerKey, lookupForUndo, oldValue: layer.text.text });
+      const oldText = layer.text.text;
+      // Save original canvas for undo (only on first edit)
+      if (!layer._originalCanvas && layer.canvas) {
+        layer._originalCanvas = layer.canvas;
+      }
+      undoStack.push({ type: 'text', layerKey, lookupForUndo, oldValue: oldText });
       layer.text.text = command.value || '';
+      // Re-render the text layer canvas so it shows in the composite
+      rerenderTextLayer(layer);
+      modifiedTextLayers.add(layer);
       break;
     }
     case 'set_visibility': {
@@ -114,7 +125,18 @@ function handleUndo(msg) {
   if (!layer) throw new Error('Undo target layer not found');
 
   switch (entry.type) {
-    case 'text': if (layer.text) layer.text.text = entry.oldValue; break;
+    case 'text':
+      if (layer.text) {
+        layer.text.text = entry.oldValue;
+        // Re-render with old text, or restore original canvas if reverting to original
+        if (layer._originalCanvas && entry.oldValue === layer._originalText) {
+          layer.canvas = layer._originalCanvas;
+          modifiedTextLayers.delete(layer);
+        } else {
+          rerenderTextLayer(layer);
+        }
+      }
+      break;
     case 'visibility': layer.hidden = entry.oldValue; break;
     case 'opacity': layer.opacity = entry.oldValue; break;
   }
@@ -216,6 +238,133 @@ function extractLayerInfo(layers, depth = 0, parentPath = '') {
     if (layer.children) result.push(...extractLayerInfo(layer.children, depth + 1, id));
   }
   return result;
+}
+
+/**
+ * Re-render a text layer's canvas with the current text content.
+ * Uses the font/size/color metadata from the PSD to approximate the rendering.
+ * Won't be pixel-perfect to Photoshop, but good enough for proofing.
+ */
+function rerenderTextLayer(layer) {
+  if (!layer.text || !layer.canvas) return;
+
+  const text = layer.text.text || '';
+  const style = layer.text.style || {};
+  const w = (layer.right ?? 0) - (layer.left ?? 0);
+  const h = (layer.bottom ?? 0) - (layer.top ?? 0);
+
+  if (w <= 0 || h <= 0) return;
+
+  // Save original text for undo detection
+  if (!layer._originalText) {
+    layer._originalText = layer._originalCanvas
+      ? undefined  // already saved
+      : layer.text.text;
+  }
+
+  // Extract font info
+  let fontSize = style.fontSize || 24;
+  let fontName = style.font?.name || 'Arial';
+  // Clean up font name for CSS (remove PostScript suffixes)
+  fontName = fontName.replace(/-Bold$|-Regular$|-Italic$|-Light$|-Medium$|-Semibold$/i, '');
+
+  // Determine font weight from style or font name
+  let fontWeight = 'normal';
+  if (style.fauxBold || /bold/i.test(style.font?.name || '')) fontWeight = 'bold';
+
+  let fontStyle = 'normal';
+  if (style.fauxItalic || /italic|oblique/i.test(style.font?.name || '')) fontStyle = 'italic';
+
+  // Extract color from text style runs or layer style
+  let fillColor = 'white';
+  if (style.fillColor) {
+    const c = style.fillColor;
+    if (c.r !== undefined) {
+      fillColor = `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
+    }
+  }
+
+  // Also check paragraph style runs for per-run colors
+  const styleRuns = layer.text.styleRuns || [];
+  if (styleRuns.length > 0 && styleRuns[0].style?.fillColor) {
+    const c = styleRuns[0].style.fillColor;
+    if (c.r !== undefined) {
+      fillColor = `rgb(${Math.round(c.r)}, ${Math.round(c.g)}, ${Math.round(c.b)})`;
+    }
+    if (styleRuns[0].style?.fontSize) {
+      fontSize = styleRuns[0].style.fontSize;
+    }
+    if (styleRuns[0].style?.font?.name) {
+      fontName = styleRuns[0].style.font.name.replace(/-Bold$|-Regular$|-Italic$|-Light$|-Medium$|-Semibold$/i, '');
+    }
+  }
+
+  // Create a new canvas for this layer
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+
+  // Set up text rendering
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = fillColor;
+  ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px "${fontName}", Arial, sans-serif`;
+  ctx.textBaseline = 'top';
+
+  // Check text justification
+  const paragraphStyle = layer.text.paragraphStyle || {};
+  const justify = paragraphStyle.justification || 'left';
+  if (justify === 'center') {
+    ctx.textAlign = 'center';
+  } else if (justify === 'right') {
+    ctx.textAlign = 'right';
+  } else {
+    ctx.textAlign = 'left';
+  }
+
+  // Word wrap and render
+  const lines = wordWrap(ctx, text, w);
+  const lineHeight = fontSize * 1.2;
+  const xPos = justify === 'center' ? w / 2 : justify === 'right' ? w : 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], xPos, i * lineHeight);
+  }
+
+  // Replace the layer canvas
+  layer.canvas = canvas;
+}
+
+/**
+ * Simple word wrap for canvas text rendering
+ */
+function wordWrap(ctx, text, maxWidth) {
+  // Handle explicit newlines
+  const paragraphs = text.split('\n');
+  const allLines = [];
+
+  for (const paragraph of paragraphs) {
+    if (!paragraph.trim()) {
+      allLines.push('');
+      continue;
+    }
+
+    const words = paragraph.split(/\s+/);
+    let line = '';
+
+    for (const word of words) {
+      const testLine = line ? `${line} ${word}` : word;
+      const metrics = ctx.measureText(testLine);
+
+      if (metrics.width > maxWidth && line) {
+        allLines.push(line);
+        line = word;
+      } else {
+        line = testLine;
+      }
+    }
+    if (line) allLines.push(line);
+  }
+
+  return allLines.length > 0 ? allLines : [''];
 }
 
 function renderComposite() {
