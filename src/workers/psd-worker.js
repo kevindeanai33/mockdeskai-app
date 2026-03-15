@@ -27,6 +27,8 @@ self.onmessage = async (e) => {
       case 'undo': handleUndo(msg); break;
       case 'export': handleExport(msg); break;
       case 'composite': handleComposite(msg); break;
+      case 'rename': handleRename(msg); break;
+      case 'delete': handleDelete(msg); break;
     }
   } catch (err) {
     self.postMessage({
@@ -143,6 +145,46 @@ function handleUndo(msg) {
 
   const composite = renderComposite();
   self.postMessage({ id: msg.id, type: 'undone', composite }, composite ? [composite] : []);
+}
+
+function handleRename(msg) {
+  if (!activePsd) throw new Error('No PSD loaded');
+  const layer = findLayerById(msg.layerId);
+  if (!layer) throw new Error(`Layer '${msg.layerId}' not found`);
+  const oldName = layer.name;
+  layer.name = msg.newName;
+  const layers = extractLayerInfo(activePsd.children || []);
+  self.postMessage({ id: msg.id, type: 'renamed', oldName, newName: msg.newName, layers });
+}
+
+function handleDelete(msg) {
+  if (!activePsd) throw new Error('No PSD loaded');
+
+  function removeFromChildren(children, targetId, parentPath) {
+    if (!children) return false;
+    for (let i = 0; i < children.length; i++) {
+      const id = parentPath ? `${parentPath}/${i}` : `${i}`;
+      if (id === targetId) {
+        const removed = children.splice(i, 1)[0];
+        undoStack.push({ type: 'delete', layerKey: targetId, lookupForUndo: 'id', parentChildren: children, index: i, layer: removed });
+        return true;
+      }
+      if (children[i].children) {
+        if (removeFromChildren(children[i].children, targetId, id)) return true;
+      }
+    }
+    return false;
+  }
+
+  if (!removeFromChildren(activePsd.children || [], msg.layerId, '')) {
+    throw new Error(`Layer '${msg.layerId}' not found`);
+  }
+
+  layerIndex = new Map();
+  buildLayerIndex(activePsd.children || []);
+  const layers = extractLayerInfo(activePsd.children || []);
+  const composite = renderComposite();
+  self.postMessage({ id: msg.id, type: 'deleted', layers, composite }, composite ? [composite] : []);
 }
 
 function handleExport(msg) {

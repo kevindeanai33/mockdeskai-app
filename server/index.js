@@ -10,12 +10,12 @@ const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { startStream, cancelStream, checkClaudeAvailable } = require('./claude');
-const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, WORKSPACE_DIR } = require('./workspace');
+const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, createDirectory, uploadFile, searchFiles, saveChatHistory, loadChatHistory, WORKSPACE_DIR } = require('./workspace');
 
 function startServer(port) {
   return new Promise((resolve) => {
     const app = express();
-    app.use(express.json());
+    app.use(express.json({ limit: '100mb' }));
 
     // Initialize workspace on server start
     const workspacePath = initWorkspace();
@@ -59,6 +59,53 @@ function startServer(port) {
       } catch (err) {
         res.status(500).json({ error: err.message });
       }
+    });
+
+    app.post('/api/files/upload', (req, res) => {
+      const { name, data, destDir } = req.body;
+      if (!name || !data) return res.status(400).json({ error: 'name and data required' });
+      try {
+        const relativePath = uploadFile(name, data, destDir || '');
+        res.json({ path: relativePath });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post('/api/files/mkdir', (req, res) => {
+      const { name } = req.body;
+      if (!name) return res.status(400).json({ error: 'name required' });
+      try {
+        const relativePath = createDirectory(name);
+        res.json({ path: relativePath });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/files/search', (req, res) => {
+      const query = req.query.q;
+      if (!query) return res.status(400).json({ error: 'q required' });
+      const results = searchFiles(query);
+      res.json({ results });
+    });
+
+    app.post('/api/chats/save', (req, res) => {
+      const { fileName, history } = req.body;
+      if (!fileName || !history) return res.status(400).json({ error: 'fileName and history required' });
+      try {
+        saveChatHistory(fileName, history);
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.get('/api/chats/load', (req, res) => {
+      const fileName = req.query.fileName;
+      if (!fileName) return res.status(400).json({ error: 'fileName required' });
+      const history = loadChatHistory(fileName);
+      res.json({ history: history || [] });
     });
 
     // Serve workspace files statically (for PSD loading)

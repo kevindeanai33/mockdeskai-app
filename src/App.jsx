@@ -1,10 +1,3 @@
-/**
- * MockDeskAI — Editor App
- *
- * PSD editor with AI chat powered by Claude CLI.
- * Ported from mockdeskai-web page.tsx, adapted for Electron + WebSocket.
- */
-
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Upload,
@@ -30,8 +23,9 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize,
+  Trash2,
 } from 'lucide-react';
-import { parsePsd, editPsd, undoPsd, rgbaToDataUrl } from '@/lib/psd-client';
+import { parsePsd, editPsd, undoPsd, renameLayer, deleteLayer, rgbaToDataUrl } from '@/lib/psd-client';
 import {
   buildPsdJsonContext,
   extractJsonCommands,
@@ -67,72 +61,111 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
+function createTab(fileName, psdDoc, editHistory = []) {
+  return {
+    id: generateId(),
+    fileName,
+    psdDoc,
+    editHistory,
+    zoom: 1,
+    panOffset: { x: 0, y: 0 },
+    collapsedGroups: new Set(psdDoc ? psdDoc.layers.filter((l) => l.type === 'group').map((l) => l.id) : []),
+    claudeSessionId: null,
+  };
+}
+
+async function saveChatToServer(fileName, history) {
+  try {
+    const saveable = history.map(({ id, prompt, response, status, timestamp }) => ({ id, prompt, response, status, timestamp }));
+    await fetch('/api/chats/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fileName, history: saveable }),
+    });
+  } catch {}
+}
+
+async function loadChatFromServer(fileName) {
+  try {
+    const res = await fetch(`/api/chats/load?fileName=${encodeURIComponent(fileName)}`);
+    const data = await res.json();
+    return data.history || [];
+  } catch {
+    return [];
+  }
+}
+
 export default function App() {
-  // ---- State ----
-  const [psdDoc, setPsdDoc] = useState(null);
-  const [editHistory, setEditHistory] = useState([]);
+  const [tabs, setTabs] = useState([]);
+  const [activeTabId, setActiveTabId] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [showLayers, setShowLayers] = useState(true);
   const [dragOver, setDragOver] = useState(false);
   const [parseError, setParseError] = useState(null);
-  const [claudeStatus, setClaudeStatus] = useState(null); // null | 'checking' | 'available' | 'unavailable'
-  const [claudeSessionId, setClaudeSessionId] = useState(null);
+  const [claudeStatus, setClaudeStatus] = useState(null);
 
-  // Zoom/pan state
-  const [zoom, setZoom] = useState(1);
-  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0 });
   const canvasContainerRef = useRef(null);
 
-  // Collapsed groups in layer panel
-  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
-
-  // Track streaming state per entry
   const streamingEntryRef = useRef(null);
   const streamingTextRef = useRef('');
+  const streamingTabIdRef = useRef(null);
   const psdDocRef = useRef(null);
 
-  // Keep psdDocRef in sync
-  useEffect(() => { psdDocRef.current = psdDoc; }, [psdDoc]);
+  const [renamingLayerId, setRenamingLayerId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef(null);
 
   const fileInputRef = useRef(null);
   const chatInputRef = useRef(null);
   const historyEndRef = useRef(null);
 
-  // Scroll to bottom on new history entries
+  const activeTab = tabs.find((t) => t.id === activeTabId) || null;
+
+  function updateTab(tabId, updates) {
+    setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, ...updates } : t));
+  }
+
+  function updateActiveTab(updates) {
+    if (!activeTabId) return;
+    updateTab(activeTabId, updates);
+  }
+
+  useEffect(() => { psdDocRef.current = activeTab?.psdDoc || null; }, [activeTab?.psdDoc]);
+
   useEffect(() => {
     historyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [editHistory.length]);
-
-  // ---- WebSocket ----
+  }, [activeTab?.editHistory?.length]);
 
   const handleWsMessage = useCallback((event) => {
     switch (event.type) {
       case 'init':
-        if (event.sessionId) setClaudeSessionId(event.sessionId);
+        if (event.sessionId && streamingTabIdRef.current) {
+          updateTab(streamingTabIdRef.current, { claudeSessionId: event.sessionId });
+        }
         break;
 
       case 'message': {
         const text = event.text || '';
         streamingTextRef.current = text;
-
-        // Update streaming entry with accumulated text
-        if (streamingEntryRef.current) {
-          setEditHistory((prev) =>
-            prev.map((e) =>
-              e.id === streamingEntryRef.current
-                ? { ...e, response: text }
-                : e
-            )
-          );
+        if (streamingEntryRef.current && streamingTabIdRef.current) {
+          const entryId = streamingEntryRef.current;
+          const tabId = streamingTabIdRef.current;
+          setTabs((prev) => prev.map((t) =>
+            t.id === tabId
+              ? { ...t, editHistory: t.editHistory.map((e) => e.id === entryId ? { ...e, response: text } : e) }
+              : t
+          ));
         }
         break;
       }
 
       case 'result': {
-        if (event.sessionId) setClaudeSessionId(event.sessionId);
+        if (event.sessionId && streamingTabIdRef.current) {
+          updateTab(streamingTabIdRef.current, { claudeSessionId: event.sessionId });
+        }
         const finalText = streamingTextRef.current || event.result || '';
         finalizeResponse(finalText);
         break;
@@ -147,30 +180,32 @@ export default function App() {
       }
 
       case 'error':
-        if (streamingEntryRef.current) {
-          setEditHistory((prev) =>
-            prev.map((e) =>
-              e.id === streamingEntryRef.current
-                ? { ...e, response: event.error || 'Error occurred', status: 'failed' }
-                : e
-            )
-          );
+        if (streamingEntryRef.current && streamingTabIdRef.current) {
+          const entryId = streamingEntryRef.current;
+          const tabId = streamingTabIdRef.current;
+          setTabs((prev) => prev.map((t) =>
+            t.id === tabId
+              ? { ...t, editHistory: t.editHistory.map((e) => e.id === entryId ? { ...e, response: event.error || 'Error occurred', status: 'failed' } : e) }
+              : t
+          ));
           streamingEntryRef.current = null;
           streamingTextRef.current = '';
+          streamingTabIdRef.current = null;
         }
         break;
 
       case 'cancelled':
-        if (streamingEntryRef.current) {
-          setEditHistory((prev) =>
-            prev.map((e) =>
-              e.id === streamingEntryRef.current
-                ? { ...e, response: streamingTextRef.current || 'Cancelled', status: 'failed' }
-                : e
-            )
-          );
+        if (streamingEntryRef.current && streamingTabIdRef.current) {
+          const entryId = streamingEntryRef.current;
+          const tabId = streamingTabIdRef.current;
+          setTabs((prev) => prev.map((t) =>
+            t.id === tabId
+              ? { ...t, editHistory: t.editHistory.map((e) => e.id === entryId ? { ...e, response: streamingTextRef.current || 'Cancelled', status: 'failed' } : e) }
+              : t
+          ));
           streamingEntryRef.current = null;
           streamingTextRef.current = '';
+          streamingTabIdRef.current = null;
         }
         break;
     }
@@ -181,14 +216,14 @@ export default function App() {
     autoConnect: true,
   });
 
-  // ---- Finalize AI response: extract + execute commands ----
-
   const finalizeResponse = useCallback(async (responseText) => {
     const entryId = streamingEntryRef.current;
+    const tabId = streamingTabIdRef.current;
     streamingEntryRef.current = null;
     streamingTextRef.current = '';
+    streamingTabIdRef.current = null;
 
-    if (!entryId) return;
+    if (!entryId || !tabId) return;
 
     const doc = psdDocRef.current;
 
@@ -204,38 +239,47 @@ export default function App() {
 
         if (lastRgba) {
           const dataUrl = rgbaToDataUrl(lastRgba, doc.width, doc.height);
-          setPsdDoc((prev) => prev ? { ...prev, compositeDataUrl: dataUrl } : null);
+          setTabs((prev) => prev.map((t) =>
+            t.id === tabId
+              ? {
+                  ...t,
+                  psdDoc: t.psdDoc ? { ...t.psdDoc, compositeDataUrl: dataUrl } : null,
+                  editHistory: t.editHistory.map((e) =>
+                    e.id === entryId ? { ...e, response: explanation || `Applied ${commands.length} edit(s).`, status: 'applied' } : e
+                  ),
+                }
+              : t
+          ));
+        } else {
+          setTabs((prev) => prev.map((t) =>
+            t.id === tabId
+              ? { ...t, editHistory: t.editHistory.map((e) => e.id === entryId ? { ...e, response: explanation || `Applied ${commands.length} edit(s).`, status: 'applied' } : e) }
+              : t
+          ));
         }
-
-        setEditHistory((prev) =>
-          prev.map((e) =>
-            e.id === entryId
-              ? { ...e, response: explanation || `Applied ${commands.length} edit(s).`, status: 'applied' }
-              : e
-          )
-        );
       } catch (err) {
-        setEditHistory((prev) =>
-          prev.map((e) =>
-            e.id === entryId
-              ? { ...e, response: `Edit failed: ${err.message}`, status: 'failed' }
-              : e
-          )
-        );
+        setTabs((prev) => prev.map((t) =>
+          t.id === tabId
+            ? { ...t, editHistory: t.editHistory.map((e) => e.id === entryId ? { ...e, response: `Edit failed: ${err.message}`, status: 'failed' } : e) }
+            : t
+        ));
       }
     } else {
-      // No commands — conversational response
-      setEditHistory((prev) =>
-        prev.map((e) =>
-          e.id === entryId
-            ? { ...e, response: responseText, status: 'applied' }
-            : e
-        )
-      );
+      setTabs((prev) => prev.map((t) =>
+        t.id === tabId
+          ? { ...t, editHistory: t.editHistory.map((e) => e.id === entryId ? { ...e, response: responseText, status: 'applied' } : e) }
+          : t
+      ));
     }
-  }, []);
 
-  // ---- Check Claude CLI on mount ----
+    setTabs((prev) => {
+      const tab = prev.find((t) => t.id === tabId);
+      if (tab && tab.psdDoc) {
+        saveChatToServer(tab.psdDoc.fileName, tab.editHistory);
+      }
+      return prev;
+    });
+  }, []);
 
   useEffect(() => {
     setClaudeStatus('checking');
@@ -247,11 +291,15 @@ export default function App() {
       .catch(() => setClaudeStatus('unavailable'));
   }, []);
 
-  // ---- File handling ----
-
   const handleFile = useCallback(async (file) => {
     if (!file.name.toLowerCase().endsWith('.psd')) {
       setParseError('Only .psd files are supported.');
+      return;
+    }
+
+    const existing = tabs.find((t) => t.fileName === file.name);
+    if (existing) {
+      setActiveTabId(existing.id);
       return;
     }
 
@@ -263,21 +311,39 @@ export default function App() {
       const doc = await parsePsd(file);
       const dataUrl = rgbaToDataUrl(doc.compositeRgba, doc.width, doc.height);
 
-      setPsdDoc({
+      const psdDoc = {
         width: doc.width,
         height: doc.height,
         layers: doc.layers,
         compositeDataUrl: dataUrl,
         fileName: file.name,
-      });
+      };
+
+      const savedHistory = await loadChatFromServer(file.name);
+
+      const tab = createTab(file.name, psdDoc, savedHistory);
+      setTabs((prev) => [...prev, tab]);
+      setActiveTabId(tab.id);
       setIsLoading(false);
-      setEditHistory([]);
-      setClaudeSessionId(null);
     } catch (err) {
       setIsLoading(false);
       setParseError(err instanceof Error ? err.message : 'Failed to parse PSD file.');
     }
-  }, []);
+  }, [tabs]);
+
+  const closeTab = useCallback((tabId) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === tabId);
+      const next = prev.filter((t) => t.id !== tabId);
+      if (tabId === activeTabId && next.length > 0) {
+        const newIdx = Math.min(idx, next.length - 1);
+        setActiveTabId(next[newIdx].id);
+      } else if (next.length === 0) {
+        setActiveTabId(null);
+      }
+      return next;
+    });
+  }, [activeTabId]);
 
   const onDrop = useCallback((e) => {
     e.preventDefault();
@@ -304,52 +370,82 @@ export default function App() {
     if (file) handleFile(file);
   }, [handleFile]);
 
-  // ---- Layer visibility ----
-
   const toggleLayerVisibility = useCallback(async (layerId, currentlyVisible) => {
-    if (!psdDoc) return;
+    if (!activeTab?.psdDoc) return;
     try {
       const rgba = await editPsd({
         action: 'set_visibility',
         id: layerId,
         visible: !currentlyVisible,
       });
-      const dataUrl = rgbaToDataUrl(rgba, psdDoc.width, psdDoc.height);
+      const dataUrl = rgbaToDataUrl(rgba, activeTab.psdDoc.width, activeTab.psdDoc.height);
 
-      setPsdDoc((prev) => {
-        if (!prev) return null;
-        return {
-          ...prev,
+      updateActiveTab({
+        psdDoc: {
+          ...activeTab.psdDoc,
           compositeDataUrl: dataUrl,
-          layers: prev.layers.map((l) =>
+          layers: activeTab.psdDoc.layers.map((l) =>
             l.id === layerId ? { ...l, visible: !l.visible } : l
           ),
-        };
+        },
       });
     } catch (err) {
       console.error('Failed to toggle visibility:', err);
     }
-  }, [psdDoc]);
+  }, [activeTab]);
 
-  // ---- Undo ----
+  const handleLayerRename = useCallback(async (layerId, newName) => {
+    if (!activeTab?.psdDoc || !newName.trim()) return;
+    try {
+      const result = await renameLayer(layerId, newName.trim());
+      updateActiveTab({
+        psdDoc: {
+          ...activeTab.psdDoc,
+          layers: result.layers,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to rename layer:', err);
+    }
+    setRenamingLayerId(null);
+    setRenameValue('');
+  }, [activeTab]);
+
+  const handleLayerDelete = useCallback(async (layerId) => {
+    if (!activeTab?.psdDoc) return;
+    try {
+      const result = await deleteLayer(layerId);
+      const dataUrl = rgbaToDataUrl(result.composite, activeTab.psdDoc.width, activeTab.psdDoc.height);
+      updateActiveTab({
+        psdDoc: {
+          ...activeTab.psdDoc,
+          layers: result.layers,
+          compositeDataUrl: dataUrl,
+        },
+      });
+    } catch (err) {
+      console.error('Failed to delete layer:', err);
+    }
+  }, [activeTab]);
 
   const handleUndo = useCallback(async (entryId) => {
-    if (!psdDoc) return;
+    if (!activeTab?.psdDoc) return;
     try {
       const rgba = await undoPsd();
-      const dataUrl = rgbaToDataUrl(rgba, psdDoc.width, psdDoc.height);
-      setPsdDoc((prev) => prev ? { ...prev, compositeDataUrl: dataUrl } : null);
-      setEditHistory((prev) => prev.filter((e) => e.id !== entryId));
+      const dataUrl = rgbaToDataUrl(rgba, activeTab.psdDoc.width, activeTab.psdDoc.height);
+      const newHistory = activeTab.editHistory.filter((e) => e.id !== entryId);
+      updateActiveTab({
+        psdDoc: { ...activeTab.psdDoc, compositeDataUrl: dataUrl },
+        editHistory: newHistory,
+      });
+      saveChatToServer(activeTab.psdDoc.fileName, newHistory);
     } catch (err) {
       console.error('Failed to undo:', err);
     }
-  }, [psdDoc]);
-
-  // ---- Zoom/Pan ----
+  }, [activeTab]);
 
   const spaceHeldRef = useRef(false);
 
-  // Track spacebar for pan mode — only when not typing in an input
   useEffect(() => {
     const onKeyDown = (e) => {
       const tag = e.target.tagName;
@@ -373,35 +469,36 @@ export default function App() {
     };
   }, []);
 
-  // Attach wheel listener with { passive: false } to avoid preventDefault error
   useEffect(() => {
     const el = canvasContainerRef.current;
     if (!el) return;
     const onWheel = (e) => {
-      if (!psdDoc) return;
+      if (!activeTab?.psdDoc) return;
       e.preventDefault();
-      // Smooth zoom — scale by 2% per pixel of scroll
       const delta = -e.deltaY * 0.002;
-      setZoom((prev) => Math.min(Math.max(prev + prev * delta, 0.05), 8));
+      const newZoom = Math.min(Math.max((activeTab.zoom || 1) + (activeTab.zoom || 1) * delta, 0.05), 8);
+      updateActiveTab({ zoom: newZoom });
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [psdDoc]);
+  }, [activeTab?.psdDoc, activeTab?.zoom]);
 
   const handleMouseDown = useCallback((e) => {
-    // Left click to pan (always — this is a viewer, not a drawing tool)
     if (e.button === 0 || e.button === 1) {
       e.preventDefault();
       isPanningRef.current = true;
-      panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+      const offset = activeTab?.panOffset || { x: 0, y: 0 };
+      panStartRef.current = { x: e.clientX - offset.x, y: e.clientY - offset.y };
     }
-  }, [panOffset]);
+  }, [activeTab?.panOffset]);
 
   const handleMouseMove = useCallback((e) => {
     if (!isPanningRef.current) return;
-    setPanOffset({
-      x: e.clientX - panStartRef.current.x,
-      y: e.clientY - panStartRef.current.y,
+    updateActiveTab({
+      panOffset: {
+        x: e.clientX - panStartRef.current.x,
+        y: e.clientY - panStartRef.current.y,
+      },
     });
   }, []);
 
@@ -410,110 +507,90 @@ export default function App() {
   }, []);
 
   const resetView = useCallback(() => {
-    setZoom(1);
-    setPanOffset({ x: 0, y: 0 });
+    updateActiveTab({ zoom: 1, panOffset: { x: 0, y: 0 } });
   }, []);
-
-  // Reset zoom/pan and collapse all groups when loading a new file
-  useEffect(() => {
-    if (psdDoc) {
-      setZoom(1);
-      setPanOffset({ x: 0, y: 0 });
-      // Collapse all groups by default
-      const groupIds = new Set(psdDoc.layers.filter((l) => l.type === 'group').map((l) => l.id));
-      setCollapsedGroups(groupIds);
-    }
-  }, [psdDoc?.fileName]);
-
-  // ---- Layer group collapse ----
 
   const toggleGroupCollapse = useCallback((layerId) => {
-    setCollapsedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(layerId)) next.delete(layerId);
-      else next.add(layerId);
-      return next;
-    });
-  }, []);
+    if (!activeTab) return;
+    const next = new Set(activeTab.collapsedGroups);
+    if (next.has(layerId)) next.delete(layerId);
+    else next.add(layerId);
+    updateActiveTab({ collapsedGroups: next });
+  }, [activeTab]);
 
-  // Filter layers based on collapsed groups
-  const visibleLayers = psdDoc ? psdDoc.layers.filter((layer) => {
-    // Check if any ancestor group is collapsed
+  const visibleLayers = activeTab?.psdDoc ? activeTab.psdDoc.layers.filter((layer) => {
     const parts = layer.id.split('/');
     for (let i = 1; i < parts.length; i++) {
       const ancestorId = parts.slice(0, i).join('/');
-      if (collapsedGroups.has(ancestorId)) return false;
+      if (activeTab.collapsedGroups.has(ancestorId)) return false;
     }
     return true;
   }) : [];
 
-  // ---- Export ----
-
   const handleExport = useCallback(async (format) => {
-    if (!psdDoc) return;
+    if (!activeTab?.psdDoc) return;
+    const doc = activeTab.psdDoc;
 
     const img = new Image();
-    img.src = psdDoc.compositeDataUrl;
+    img.src = doc.compositeDataUrl;
     await new Promise((resolve) => (img.onload = resolve));
 
     const canvas = document.createElement('canvas');
-    canvas.width = psdDoc.width;
-    canvas.height = psdDoc.height;
+    canvas.width = doc.width;
+    canvas.height = doc.height;
     const ctx = canvas.getContext('2d');
     ctx.drawImage(img, 0, 0);
 
     const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
     const ext = format === 'png' ? 'png' : 'jpg';
-    const baseName = psdDoc.fileName.replace(/\.psd$/i, '');
+    const baseName = doc.fileName.replace(/\.psd$/i, '');
 
     canvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `${baseName}.${ext}`);
     }, mimeType, 0.92);
-  }, [psdDoc]);
-
-  // ---- Chat submit ----
+  }, [activeTab?.psdDoc]);
 
   const handleChatSubmit = useCallback((e) => {
     e.preventDefault();
     const prompt = chatInput.trim();
-    if (!prompt || !psdDoc || !isConnected) return;
+    if (!prompt || !activeTab?.psdDoc || !isConnected) return;
 
     const entryId = generateId();
+    const doc = activeTab.psdDoc;
 
-    // Build the full message with PSD context
-    const textLayers = psdDoc.layers.filter((l) => l.type === 'text');
-    const context = buildPsdJsonContext(psdDoc.fileName, psdDoc.layers, textLayers);
+    const textLayers = doc.layers.filter((l) => l.type === 'text');
+    const context = buildPsdJsonContext(doc.fileName, doc.layers, textLayers);
     const fullMessage = `${context}\n\nUser request: ${prompt}`;
 
-    // Track streaming state
     streamingEntryRef.current = entryId;
     streamingTextRef.current = '';
+    streamingTabIdRef.current = activeTab.id;
 
-    setEditHistory((prev) => [
-      ...prev,
-      {
-        id: entryId,
-        prompt,
-        response: '',
-        status: 'streaming',
-        timestamp: Date.now(),
-      },
-    ]);
+    const newEntry = {
+      id: entryId,
+      prompt,
+      response: '',
+      status: 'streaming',
+      timestamp: Date.now(),
+    };
+
+    updateActiveTab({
+      editHistory: [...activeTab.editHistory, newEntry],
+    });
     setChatInput('');
 
-    // Send via WebSocket
     send({
       type: 'start',
       message: fullMessage,
-      sessionId: claudeSessionId,
+      sessionId: activeTab.claudeSessionId,
     });
-  }, [chatInput, psdDoc, isConnected, send, claudeSessionId]);
+  }, [chatInput, activeTab, isConnected, send]);
 
-  // =========================================================================
-  // Render — always show the full editor layout
-  // =========================================================================
+  const psdDoc = activeTab?.psdDoc || null;
+  const editHistory = activeTab?.editHistory || [];
+  const zoom = activeTab?.zoom || 1;
+  const panOffset = activeTab?.panOffset || { x: 0, y: 0 };
 
-  // Hidden file input (always present)
   const fileInput = (
     <input
       ref={fileInputRef}
@@ -528,7 +605,7 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-gray-950 text-gray-200">
       {fileInput}
-      {/* Toolbar */}
+
       <header className="flex h-12 shrink-0 items-center gap-4 border-b border-gray-800 bg-gray-900 px-4">
         <div className="flex items-center gap-2">
           <FileImage size={18} className="text-blue-500" />
@@ -552,7 +629,6 @@ export default function App() {
 
         <div className="flex-1" />
 
-        {/* Connection status dot */}
         <div className="flex items-center gap-1.5">
           <div className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
           <span className="text-xs text-gray-500">
@@ -560,7 +636,6 @@ export default function App() {
           </span>
         </div>
 
-        {/* Open file */}
         <button
           onClick={() => fileInputRef.current?.click()}
           className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
@@ -602,14 +677,34 @@ export default function App() {
         )}
       </header>
 
-      {/* Main content */}
+      {tabs.length > 0 && (
+        <div className="flex h-8 shrink-0 items-end gap-0 border-b border-gray-800 bg-gray-900 overflow-x-auto">
+          {tabs.map((tab) => (
+            <div
+              key={tab.id}
+              className={`group flex h-full items-center gap-1.5 px-3 text-xs cursor-pointer border-b-2 transition-colors ${
+                tab.id === activeTabId
+                  ? 'bg-gray-800 text-white border-blue-500'
+                  : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/50'
+              }`}
+              onClick={() => setActiveTabId(tab.id)}
+            >
+              <span className="truncate max-w-[120px]">{tab.fileName}</span>
+              <button
+                className="ml-1 shrink-0 text-gray-600 hover:text-red-400 transition-colors"
+                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar: File tree */}
         <FileTree onFileSelect={handleFile} />
 
-        {/* Center: Canvas + Chat */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Canvas area */}
           <div
             ref={canvasContainerRef}
             className="relative flex-1 overflow-hidden bg-gray-950"
@@ -639,13 +734,12 @@ export default function App() {
                     draggable={false}
                   />
                 </div>
-                {/* Zoom controls */}
                 <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-lg bg-gray-900/80 px-2 py-1 backdrop-blur">
-                  <button onClick={() => setZoom((z) => Math.max(z - 0.25, 0.1))} className="p-1 text-gray-400 hover:text-white">
+                  <button onClick={() => updateActiveTab({ zoom: Math.max(zoom - 0.25, 0.1) })} className="p-1 text-gray-400 hover:text-white">
                     <ZoomOut size={14} />
                   </button>
                   <span className="min-w-[3rem] text-center text-xs text-gray-400">{Math.round(zoom * 100)}%</span>
-                  <button onClick={() => setZoom((z) => Math.min(z + 0.25, 5))} className="p-1 text-gray-400 hover:text-white">
+                  <button onClick={() => updateActiveTab({ zoom: Math.min(zoom + 0.25, 5) })} className="p-1 text-gray-400 hover:text-white">
                     <ZoomIn size={14} />
                   </button>
                   <button onClick={resetView} className="p-1 text-gray-400 hover:text-white" title="Reset view">
@@ -654,7 +748,6 @@ export default function App() {
                 </div>
               </>
             ) : (
-              /* Empty state — drop zone */
               <div
                 className="absolute inset-0 flex items-center justify-center"
                 onClick={() => fileInputRef.current?.click()}
@@ -685,9 +778,7 @@ export default function App() {
             )}
           </div>
 
-          {/* Chat area */}
           <div className="shrink-0 border-t border-gray-800 bg-gray-900">
-            {/* Edit history */}
             {editHistory.length > 0 && (
               <div className="max-h-48 overflow-y-auto border-b border-gray-800 px-4 py-2">
                 {editHistory.map((entry) => (
@@ -717,7 +808,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Chat input */}
             <form onSubmit={handleChatSubmit} className="flex items-center gap-2 px-4 py-3">
               <input
                 ref={chatInputRef}
@@ -739,7 +829,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right sidebar: Layers */}
         {showLayers && psdDoc && (
           <aside className="flex w-[250px] shrink-0 flex-col border-l border-gray-800 bg-gray-900">
             <div className="flex h-10 items-center border-b border-gray-800 px-3">
@@ -751,15 +840,15 @@ export default function App() {
             <nav className="flex-1 overflow-y-auto" aria-label="Layer list">
               {visibleLayers.map((layer) => {
                 const isGroup = layer.type === 'group';
-                const isCollapsed = collapsedGroups.has(layer.id);
+                const isCollapsed = activeTab.collapsedGroups.has(layer.id);
+                const isRenaming = renamingLayerId === layer.id;
 
                 return (
                   <div
                     key={layer.id}
-                    className={`flex items-center gap-1.5 border-b border-gray-800/50 py-1.5 hover:bg-gray-800/50 ${isGroup ? 'bg-gray-900/50' : ''}`}
+                    className={`group/layer flex items-center gap-1.5 border-b border-gray-800/50 py-1.5 hover:bg-gray-800/50 ${isGroup ? 'bg-gray-900/50' : ''}`}
                     style={{ paddingLeft: `${8 + (layer.depth || 0) * 14}px`, paddingRight: '8px' }}
                   >
-                    {/* Collapse toggle for groups */}
                     {isGroup ? (
                       <button
                         onClick={() => toggleGroupCollapse(layer.id)}
@@ -774,7 +863,6 @@ export default function App() {
                       <span className="w-4 shrink-0" />
                     )}
 
-                    {/* Visibility toggle */}
                     <button
                       onClick={() => toggleLayerVisibility(layer.id, layer.visible)}
                       className="shrink-0 text-gray-400 transition-colors hover:text-white"
@@ -785,20 +873,46 @@ export default function App() {
                       }
                     </button>
 
-                    {/* Icon */}
                     {layerTypeIcon(layer.type, isCollapsed)}
 
-                    {/* Name */}
-                    <span
-                      className={`flex-1 truncate text-xs ${
-                        isGroup
-                          ? 'font-medium ' + (layer.visible ? 'text-gray-200' : 'text-gray-500')
-                          : layer.visible ? 'text-gray-300' : 'text-gray-600'
-                      }`}
-                      title={layer.name}
+                    {isRenaming ? (
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleLayerRename(layer.id, renameValue);
+                          if (e.key === 'Escape') { setRenamingLayerId(null); setRenameValue(''); }
+                        }}
+                        onBlur={() => handleLayerRename(layer.id, renameValue)}
+                        className="flex-1 min-w-0 rounded border border-blue-500 bg-gray-800 px-1 py-0 text-xs text-white outline-none"
+                        autoFocus
+                      />
+                    ) : (
+                      <span
+                        className={`flex-1 truncate text-xs ${
+                          isGroup
+                            ? 'font-medium ' + (layer.visible ? 'text-gray-200' : 'text-gray-500')
+                            : layer.visible ? 'text-gray-300' : 'text-gray-600'
+                        }`}
+                        title={layer.name}
+                        onDoubleClick={() => {
+                          setRenamingLayerId(layer.id);
+                          setRenameValue(layer.name);
+                        }}
+                      >
+                        {layer.name}
+                      </span>
+                    )}
+
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleLayerDelete(layer.id); }}
+                      className="shrink-0 opacity-0 group-hover/layer:opacity-100 text-gray-600 hover:text-red-400 transition-all p-0.5"
+                      title="Delete layer"
                     >
-                      {layer.name}
-                    </span>
+                      <Trash2 size={12} />
+                    </button>
                   </div>
                 );
               })}

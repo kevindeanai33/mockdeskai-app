@@ -141,10 +141,77 @@ function resolveWorkspacePath(relativePath) {
   return resolved;
 }
 
+function createDirectory(name) {
+  const dirPath = path.resolve(WORKSPACE_DIR, name);
+  if (!dirPath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  fs.mkdirSync(dirPath, { recursive: true });
+  return path.relative(WORKSPACE_DIR, dirPath);
+}
+
+function uploadFile(name, base64Data, destDir) {
+  const targetDir = destDir ? path.resolve(WORKSPACE_DIR, destDir) : WORKSPACE_DIR;
+  if (!targetDir.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+  const filePath = path.join(targetDir, name);
+  if (!filePath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  const buffer = Buffer.from(base64Data, 'base64');
+  fs.writeFileSync(filePath, buffer);
+  return path.relative(WORKSPACE_DIR, filePath);
+}
+
+function searchFiles(query, dir = WORKSPACE_DIR, depth = 0, maxDepth = 4) {
+  if (depth > maxDepth || !fs.existsSync(dir)) return [];
+  const results = [];
+  const q = query.toLowerCase();
+  const items = fs.readdirSync(dir, { withFileTypes: true });
+  for (const item of items) {
+    if (item.name.startsWith('.')) continue;
+    const fullPath = path.join(dir, item.name);
+    const relativePath = path.relative(WORKSPACE_DIR, fullPath);
+    if (item.isDirectory()) {
+      if (item.name.toLowerCase().includes(q)) {
+        results.push({ name: item.name, path: relativePath, type: 'directory' });
+      }
+      results.push(...searchFiles(query, fullPath, depth + 1, maxDepth));
+    } else {
+      if (item.name.toLowerCase().includes(q)) {
+        const ext = path.extname(item.name).toLowerCase();
+        results.push({ name: item.name, path: relativePath, type: 'file', ext });
+      }
+    }
+  }
+  return results;
+}
+
+const CHATS_DIR = path.join(WORKSPACE_DIR, '.chats');
+
+function saveChatHistory(fileName, history) {
+  if (!fs.existsSync(CHATS_DIR)) fs.mkdirSync(CHATS_DIR, { recursive: true });
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = path.join(CHATS_DIR, `${safeName}.json`);
+  fs.writeFileSync(filePath, JSON.stringify(history, null, 2), 'utf-8');
+}
+
+function loadChatHistory(fileName) {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = path.join(CHATS_DIR, `${safeName}.json`);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   WORKSPACE_DIR,
   initWorkspace,
   getFileTree,
   importFile,
   resolveWorkspacePath,
+  createDirectory,
+  uploadFile,
+  searchFiles,
+  saveChatHistory,
+  loadChatHistory,
 };

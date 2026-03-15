@@ -63,6 +63,16 @@ export async function exportPsd(format, quality) {
   return result.buffer;
 }
 
+export async function renameLayer(layerId, newName) {
+  const result = await send({ type: 'rename', layerId, newName });
+  return result;
+}
+
+export async function deleteLayer(layerId) {
+  const result = await send({ type: 'delete', layerId });
+  return result;
+}
+
 export async function getComposite() {
   const result = await send({ type: 'composite' });
   return result.composite;
