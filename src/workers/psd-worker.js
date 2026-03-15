@@ -105,7 +105,84 @@ function handleEdit(msg) {
     }
     case 'set_text_color': {
       if (!layer.text) throw new Error(`Layer '${layerKey}' is not a text layer`);
-      // TODO: parse command.color hex and apply to text style
+      if (!layer._originalCanvas && layer.canvas) layer._originalCanvas = layer.canvas;
+      const oldColor = layer.text.style?.fillColor || null;
+      undoStack.push({ type: 'text_color', layerKey, lookupForUndo, oldValue: oldColor });
+      // Parse hex color to RGB
+      const hex = (command.color || '#ffffff').replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      if (!layer.text.style) layer.text.style = {};
+      layer.text.style.fillColor = { r, g, b };
+      // Also update style runs if they exist
+      if (layer.text.styleRuns) {
+        for (const run of layer.text.styleRuns) {
+          if (run.style) run.style.fillColor = { r, g, b };
+        }
+      }
+      rerenderTextLayer(layer);
+      modifiedTextLayers.add(layer);
+      break;
+    }
+    case 'set_font_size': {
+      if (!layer.text) throw new Error(`Layer '${layerKey}' is not a text layer`);
+      if (!layer._originalCanvas && layer.canvas) layer._originalCanvas = layer.canvas;
+      const oldSize = layer.text.style?.fontSize || 24;
+      undoStack.push({ type: 'font_size', layerKey, lookupForUndo, oldValue: oldSize });
+      if (!layer.text.style) layer.text.style = {};
+      layer.text.style.fontSize = command.fontSize;
+      if (layer.text.styleRuns) {
+        for (const run of layer.text.styleRuns) {
+          if (run.style) run.style.fontSize = command.fontSize;
+        }
+      }
+      rerenderTextLayer(layer);
+      modifiedTextLayers.add(layer);
+      break;
+    }
+    case 'set_font': {
+      if (!layer.text) throw new Error(`Layer '${layerKey}' is not a text layer`);
+      if (!layer._originalCanvas && layer.canvas) layer._originalCanvas = layer.canvas;
+      const oldFont = layer.text.style?.font?.name || 'Arial';
+      undoStack.push({ type: 'font', layerKey, lookupForUndo, oldValue: oldFont });
+      if (!layer.text.style) layer.text.style = {};
+      if (!layer.text.style.font) layer.text.style.font = {};
+      layer.text.style.font.name = command.fontName;
+      if (layer.text.styleRuns) {
+        for (const run of layer.text.styleRuns) {
+          if (run.style) {
+            if (!run.style.font) run.style.font = {};
+            run.style.font.name = command.fontName;
+          }
+        }
+      }
+      rerenderTextLayer(layer);
+      modifiedTextLayers.add(layer);
+      break;
+    }
+    case 'move_layer': {
+      const oldLeft = layer.left ?? 0;
+      const oldTop = layer.top ?? 0;
+      undoStack.push({ type: 'move', layerKey, lookupForUndo, oldValue: { left: oldLeft, top: oldTop } });
+      if (command.x !== undefined) layer.left = command.x;
+      if (command.y !== undefined) layer.top = command.y;
+      // Update right/bottom to maintain dimensions
+      const w = (layer.right ?? 0) - oldLeft;
+      const h = (layer.bottom ?? 0) - oldTop;
+      layer.right = (layer.left ?? 0) + w;
+      layer.bottom = (layer.top ?? 0) + h;
+      break;
+    }
+    case 'resize_layer': {
+      if (!layer.text) throw new Error('Resize only supported for text layers currently');
+      const oldBounds = { left: layer.left, top: layer.top, right: layer.right, bottom: layer.bottom };
+      undoStack.push({ type: 'resize', layerKey, lookupForUndo, oldValue: oldBounds });
+      if (command.width !== undefined) layer.right = (layer.left ?? 0) + command.width;
+      if (command.height !== undefined) layer.bottom = (layer.top ?? 0) + command.height;
+      if (!layer._originalCanvas && layer.canvas) layer._originalCanvas = layer.canvas;
+      rerenderTextLayer(layer);
+      modifiedTextLayers.add(layer);
       break;
     }
     default:
@@ -141,6 +218,54 @@ function handleUndo(msg) {
       break;
     case 'visibility': layer.hidden = entry.oldValue; break;
     case 'opacity': layer.opacity = entry.oldValue; break;
+    case 'text_color':
+      if (layer.text) {
+        if (!layer.text.style) layer.text.style = {};
+        layer.text.style.fillColor = entry.oldValue;
+        if (layer.text.styleRuns) {
+          for (const run of layer.text.styleRuns) {
+            if (run.style) run.style.fillColor = entry.oldValue;
+          }
+        }
+        rerenderTextLayer(layer);
+      }
+      break;
+    case 'font_size':
+      if (layer.text) {
+        if (!layer.text.style) layer.text.style = {};
+        layer.text.style.fontSize = entry.oldValue;
+        if (layer.text.styleRuns) {
+          for (const run of layer.text.styleRuns) { if (run.style) run.style.fontSize = entry.oldValue; }
+        }
+        rerenderTextLayer(layer);
+      }
+      break;
+    case 'font':
+      if (layer.text) {
+        if (!layer.text.style) layer.text.style = {};
+        if (!layer.text.style.font) layer.text.style.font = {};
+        layer.text.style.font.name = entry.oldValue;
+        if (layer.text.styleRuns) {
+          for (const run of layer.text.styleRuns) {
+            if (run.style) { if (!run.style.font) run.style.font = {}; run.style.font.name = entry.oldValue; }
+          }
+        }
+        rerenderTextLayer(layer);
+      }
+      break;
+    case 'move':
+      layer.left = entry.oldValue.left;
+      layer.top = entry.oldValue.top;
+      layer.right = entry.oldValue.left + ((layer.right ?? 0) - (layer.left ?? 0));
+      layer.bottom = entry.oldValue.top + ((layer.bottom ?? 0) - (layer.top ?? 0));
+      break;
+    case 'resize':
+      layer.left = entry.oldValue.left;
+      layer.top = entry.oldValue.top;
+      layer.right = entry.oldValue.right;
+      layer.bottom = entry.oldValue.bottom;
+      if (layer.text) rerenderTextLayer(layer);
+      break;
   }
 
   const composite = renderComposite();

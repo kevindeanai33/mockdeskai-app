@@ -19,6 +19,9 @@ AVAILABLE COMMANDS:
 { "action": "set_visibility", "layer": "Layer Name", "visible": false }
 { "action": "set_opacity", "layer": "Layer Name", "opacity": 50 }
 { "action": "set_text_color", "layer": "Layer Name", "color": "#FF0000" }
+{ "action": "set_font_size", "layer": "Layer Name", "fontSize": 48 }
+{ "action": "set_font", "layer": "Layer Name", "fontName": "Arial" }
+{ "action": "move_layer", "layer": "Layer Name", "x": 100, "y": 200 }
 \`\`\`
 
 RULES:
@@ -91,7 +94,7 @@ export function extractJsonCommands(text) {
     }
   }
 
-  const validActions = ['set_text', 'set_visibility', 'set_opacity', 'set_text_color'];
+  const validActions = ['set_text', 'set_visibility', 'set_opacity', 'set_text_color', 'set_font_size', 'set_font', 'move_layer', 'resize_layer'];
   return commands.filter((cmd) => {
     if (!cmd.action || typeof cmd.action !== 'string') return false;
     if (!validActions.includes(cmd.action)) return false;

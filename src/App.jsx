@@ -205,9 +205,11 @@ export default function App() {
 
   useEffect(() => { psdDocRef.current = activeTab?.psdDoc || null; }, [activeTab?.psdDoc]);
 
+  // Auto-scroll chat to bottom on new entries and during streaming
+  const lastEntry = activeTab?.editHistory?.[activeTab.editHistory.length - 1];
   useEffect(() => {
     historyEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeTab?.editHistory?.length]);
+  }, [activeTab?.editHistory?.length, lastEntry?.response, lastEntry?.status]);
 
   const handleWsMessage = useCallback((event) => {
     switch (event.type) {
