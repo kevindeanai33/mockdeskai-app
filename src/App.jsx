@@ -24,6 +24,8 @@ import {
   ZoomOut,
   Maximize,
   Trash2,
+  Settings as SettingsIcon,
+  Sparkles,
 } from 'lucide-react';
 import { parsePsd, editPsd, undoPsd, renameLayer, deleteLayer, rgbaToDataUrl, ensureLoaded } from '@/lib/psd-client';
 import {
@@ -34,6 +36,7 @@ import {
 } from '@/services/psdJsonContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import FileTree from './FileTree';
+import Settings from './Settings';
 
 function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -95,6 +98,55 @@ async function loadChatFromServer(fileName) {
   }
 }
 
+function LayerContextMenu({ x, y, layer, onClose, onRename, onDelete, onCopyName, onToggleVisibility }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) onClose();
+    };
+    const handleKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [onClose]);
+
+  const items = [
+    { label: 'Rename', action: () => onRename(layer) },
+    { label: layer.visible ? 'Hide' : 'Show', action: () => onToggleVisibility(layer) },
+    { label: 'Copy Name', action: () => onCopyName(layer) },
+    { divider: true },
+    { label: 'Delete', action: () => onDelete(layer), danger: true },
+  ];
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-50 min-w-[140px] rounded-lg border border-gray-700 bg-gray-900 py-1 shadow-xl"
+      style={{ left: x, top: y }}
+    >
+      {items.map((item, i) =>
+        item.divider ? (
+          <div key={i} className="my-1 border-t border-gray-800" />
+        ) : (
+          <button
+            key={i}
+            onClick={item.action}
+            className={`flex w-full items-center px-3 py-1.5 text-xs transition-colors ${
+              item.danger ? 'text-red-400 hover:bg-red-500/10' : 'text-gray-300 hover:bg-gray-800'
+            }`}
+          >
+            {item.label}
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [tabs, setTabs] = useState([]);
   const [activeTabId, setActiveTabId] = useState(null);
@@ -103,6 +155,9 @@ export default function App() {
   const [showLayers, setShowLayers] = useState(true);
   const [parseError, setParseError] = useState(null);
   const [claudeStatus, setClaudeStatus] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState(null);
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0 });
@@ -116,6 +171,8 @@ export default function App() {
   const [renamingLayerId, setRenamingLayerId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef(null);
+
+  const [layerContextMenu, setLayerContextMenu] = useState(null); // { x, y, layer }
 
   const fileInputRef = useRef(null);
   const chatInputRef = useRef(null);
@@ -190,6 +247,7 @@ export default function App() {
           streamingEntryRef.current = null;
           streamingTextRef.current = '';
           streamingTabIdRef.current = null;
+          setIsStreaming(false);
         }
         break;
 
@@ -205,6 +263,7 @@ export default function App() {
           streamingEntryRef.current = null;
           streamingTextRef.current = '';
           streamingTabIdRef.current = null;
+          setIsStreaming(false);
         }
         break;
     }
@@ -221,6 +280,7 @@ export default function App() {
     streamingEntryRef.current = null;
     streamingTextRef.current = '';
     streamingTabIdRef.current = null;
+    setIsStreaming(false);
 
     if (!entryId || !tabId) return;
 
@@ -288,6 +348,13 @@ export default function App() {
         setClaudeStatus(data.claude?.available ? 'available' : 'unavailable');
       })
       .catch(() => setClaudeStatus('unavailable'));
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then(setSettings)
+      .catch(() => {});
   }, []);
 
   const handleFile = useCallback(async (file) => {
@@ -542,13 +609,32 @@ export default function App() {
     const entryId = generateId();
     const doc = activeTab.psdDoc;
 
+    const toneInstructions = {
+      professional: 'Respond in a professional, business-appropriate tone.',
+      casual: 'Respond in a friendly, casual conversational tone.',
+      concise: 'Keep responses extremely brief and to-the-point. One sentence max for explanations.',
+      detailed: 'Provide thorough explanations with context for each action.',
+      pirate: 'Respond as a pirate. Use nautical language, "Ahoy!", "Arrr!", etc.',
+    };
+
     const textLayers = doc.layers.filter((l) => l.type === 'text');
     const context = buildPsdJsonContext(doc.fileName, doc.layers, textLayers);
-    const fullMessage = `${context}\n\nUser request: ${prompt}`;
+
+    let preamble = '';
+    if (settings?.profile?.name) {
+      preamble += `The user's name is ${settings.profile.name}. `;
+    }
+    const tone = settings?.ai?.responseTone || 'professional';
+    if (toneInstructions[tone]) {
+      preamble += toneInstructions[tone] + ' ';
+    }
+
+    const fullMessage = `${preamble}\n${context}\n\nUser request: ${prompt}`;
 
     streamingEntryRef.current = entryId;
     streamingTextRef.current = '';
     streamingTabIdRef.current = activeTab.id;
+    setIsStreaming(true);
 
     const newEntry = {
       id: entryId,
@@ -568,7 +654,7 @@ export default function App() {
       message: fullMessage,
       sessionId: activeTab.claudeSessionId,
     });
-  }, [chatInput, activeTab, isConnected, send]);
+  }, [chatInput, activeTab, isConnected, send, settings]);
 
   const psdDoc = activeTab?.psdDoc || null;
   const editHistory = activeTab?.editHistory || [];
@@ -619,6 +705,19 @@ export default function App() {
             {isConnected ? 'Connected' : 'Disconnected'}
           </span>
         </div>
+
+        <div className="flex items-center gap-1.5 rounded-md bg-gray-800/60 px-2 py-1">
+          <Sparkles size={13} className={`text-purple-400 ${isStreaming ? 'animate-spin' : ''}`} />
+          <span className="text-xs font-medium text-gray-300">Claude</span>
+        </div>
+
+        <button
+          onClick={() => setShowSettings(true)}
+          className="rounded p-1.5 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
+          title="Settings"
+        >
+          <SettingsIcon size={16} />
+        </button>
 
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -820,6 +919,11 @@ export default function App() {
                     key={layer.id}
                     className={`group/layer flex items-center gap-1.5 border-b border-gray-800/50 py-1.5 hover:bg-gray-800/50 ${isGroup ? 'bg-gray-900/50' : ''}`}
                     style={{ paddingLeft: `${8 + (layer.depth || 0) * 14}px`, paddingRight: '8px' }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setLayerContextMenu({ x: e.clientX, y: e.clientY, layer });
+                    }}
                   >
                     {isGroup ? (
                       <button
@@ -892,6 +996,38 @@ export default function App() {
           </aside>
         )}
       </div>
+      {layerContextMenu && (
+        <LayerContextMenu
+          x={layerContextMenu.x}
+          y={layerContextMenu.y}
+          layer={layerContextMenu.layer}
+          onClose={() => setLayerContextMenu(null)}
+          onRename={(layer) => {
+            setRenamingLayerId(layer.id);
+            setRenameValue(layer.name);
+            setLayerContextMenu(null);
+          }}
+          onDelete={(layer) => {
+            handleLayerDelete(layer.id);
+            setLayerContextMenu(null);
+          }}
+          onCopyName={(layer) => {
+            navigator.clipboard.writeText(layer.name);
+            setLayerContextMenu(null);
+          }}
+          onToggleVisibility={(layer) => {
+            toggleLayerVisibility(layer.id, layer.visible);
+            setLayerContextMenu(null);
+          }}
+        />
+      )}
+      {showSettings && settings && (
+        <Settings
+          settings={settings}
+          onSettingsChange={setSettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
   );
 }

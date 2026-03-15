@@ -184,6 +184,38 @@ function searchFiles(query, dir = WORKSPACE_DIR, depth = 0, maxDepth = 4) {
   return results;
 }
 
+const SETTINGS_FILE = path.join(WORKSPACE_DIR, '.settings.json');
+
+const DEFAULT_SETTINGS = {
+  profile: { name: '', company: '', role: 'Sales Rep' },
+  appearance: { theme: 'dark' },
+  ai: {
+    responseTone: 'professional',
+    autoApplyEdits: true,
+  },
+  workspace: {
+    defaultExportFormat: 'png',
+    showHiddenFiles: false,
+  },
+};
+
+function loadSettings() {
+  if (!fs.existsSync(SETTINGS_FILE)) return DEFAULT_SETTINGS;
+  try {
+    const saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf-8'));
+    return {
+      profile: { ...DEFAULT_SETTINGS.profile, ...saved.profile },
+      appearance: { ...DEFAULT_SETTINGS.appearance, ...saved.appearance },
+      ai: { ...DEFAULT_SETTINGS.ai, ...saved.ai },
+      workspace: { ...DEFAULT_SETTINGS.workspace, ...saved.workspace },
+    };
+  } catch { return DEFAULT_SETTINGS; }
+}
+
+function saveSettings(settings) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+}
+
 const CHATS_DIR = path.join(WORKSPACE_DIR, '.chats');
 
 function saveChatHistory(fileName, history) {
@@ -276,4 +308,6 @@ module.exports = {
   searchFiles,
   saveChatHistory,
   loadChatHistory,
+  loadSettings,
+  saveSettings,
 };

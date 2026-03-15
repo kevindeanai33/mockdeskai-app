@@ -12,7 +12,7 @@ const express = require('express');
 const multer = require('multer');
 const { WebSocketServer } = require('ws');
 const { startStream, cancelStream, checkClaudeAvailable } = require('./claude');
-const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, createDirectory, uploadFile, moveUploadedFile, renameFile, deleteFile, moveFile, searchFiles, saveChatHistory, loadChatHistory, WORKSPACE_DIR } = require('./workspace');
+const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, createDirectory, uploadFile, moveUploadedFile, renameFile, deleteFile, moveFile, searchFiles, saveChatHistory, loadChatHistory, loadSettings, saveSettings, WORKSPACE_DIR } = require('./workspace');
 
 const upload = multer({ dest: path.join(os.tmpdir(), 'mockdeskai-uploads') });
 
@@ -143,6 +143,25 @@ function startServer(port) {
       if (!fileName) return res.status(400).json({ error: 'fileName required' });
       const history = loadChatHistory(fileName);
       res.json({ history: history || [] });
+    });
+
+    // Settings
+    app.get('/api/settings', (_req, res) => {
+      try {
+        const settings = loadSettings();
+        res.json(settings);
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post('/api/settings', (req, res) => {
+      try {
+        saveSettings(req.body);
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
     });
 
     // Serve workspace files statically (for PSD loading)
