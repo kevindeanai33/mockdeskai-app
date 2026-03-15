@@ -38,7 +38,9 @@ function send(msg, transfer) {
 }
 
 export async function parsePsd(file) {
-  const buffer = file instanceof File ? await file.arrayBuffer() : file;
+  const buffer = (file instanceof ArrayBuffer) ? file
+    : (typeof file.arrayBuffer === 'function') ? await file.arrayBuffer()
+    : file;
   const result = await send({ type: 'parse', buffer }, [buffer]);
   return {
     width: result.width,

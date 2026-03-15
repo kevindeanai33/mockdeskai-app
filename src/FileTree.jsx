@@ -439,9 +439,10 @@ export default function FileTree({ onFileSelect }) {
   const handleFileClick = useCallback(async (filePath) => {
     try {
       const res = await fetch(`/api/files/read?path=${encodeURIComponent(filePath)}`);
-      const blob = await res.blob();
-      const file = new File([blob], filePath.split('/').pop() || filePath, { type: 'application/octet-stream' });
-      onFileSelect(file);
+      const buffer = await res.arrayBuffer();
+      const fileName = filePath.split('/').pop() || filePath;
+      // Pass as a File-like object with arrayBuffer method (avoids File constructor issues)
+      onFileSelect({ name: fileName, arrayBuffer: () => Promise.resolve(buffer) });
     } catch (err) {
       console.error('Failed to open file:', err);
     }
