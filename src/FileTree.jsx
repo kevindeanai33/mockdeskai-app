@@ -241,22 +241,38 @@ function UploadModal({ onClose, onUploadDone }) {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
+  const [stagedFiles, setStagedFiles] = useState([]);
   const fileRef = useRef(null);
 
-  const doUpload = async (file) => {
+  const addFiles = (fileList) => {
+    const newFiles = Array.from(fileList);
+    setStagedFiles((prev) => {
+      const existing = new Set(prev.map((f) => f.name));
+      return [...prev, ...newFiles.filter((f) => !existing.has(f.name))];
+    });
+  };
+
+  const removeFile = (name) => {
+    setStagedFiles((prev) => prev.filter((f) => f.name !== name));
+  };
+
+  const uploadAll = async () => {
+    if (stagedFiles.length === 0) return;
     setUploading(true);
     setError(null);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('destDir', 'Imports');
-      const res = await fetch('/api/files/upload', {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || 'Upload failed');
+      for (const file of stagedFiles) {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('destDir', 'Imports');
+        const res = await fetch('/api/files/upload', {
+          method: 'POST',
+          body: formData,
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error || `Failed to upload ${file.name}`);
+        }
       }
       onUploadDone();
       onClose();
@@ -269,48 +285,99 @@ function UploadModal({ onClose, onUploadDone }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) doUpload(file);
+    if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
   };
 
   const handleFileChange = (e) => {
-    const file = e.target.files?.[0];
-    if (file) doUpload(file);
+    if (e.target.files?.length) addFiles(e.target.files);
+    e.target.value = '';
   };
+
+  const fileCount = stagedFiles.length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div className="w-96 rounded-lg bg-gray-900 border border-gray-700 p-6" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-white">Upload File</h3>
+      <div className="w-[440px] rounded-xl bg-gray-900 border border-gray-700 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 pt-5 pb-3">
+          <h3 className="text-base font-semibold text-white">Upload Files</h3>
           <button onClick={onClose} className="text-gray-500 hover:text-white">
-            <X size={16} />
+            <X size={18} />
           </button>
         </div>
-        <div
-          className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors ${
-            dragging ? 'border-blue-500 bg-blue-500/10' : 'border-gray-700 hover:border-gray-500'
-          }`}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={handleDrop}
-          onClick={() => fileRef.current?.click()}
-          style={{ cursor: 'pointer' }}
-        >
-          <Upload size={28} className="mb-2 text-gray-500" />
-          <p className="text-xs text-gray-400">Drop a file here</p>
-          <p className="text-[10px] text-gray-600 mt-1">or click to choose files</p>
-          <p className="text-[10px] text-gray-600 mt-1">.psd, .png, .jpg</p>
+
+        {/* Drop zone */}
+        <div className="px-5 pb-3">
+          <div
+            className={`flex flex-col items-center justify-center rounded-lg border-2 border-dashed px-6 py-10 transition-colors ${
+              dragging ? 'border-blue-500 bg-blue-500/10' : 'border-gray-700'
+            }`}
+            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={handleDrop}
+          >
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800">
+              <Upload size={22} className="text-gray-500" />
+            </div>
+            <p className="text-sm text-gray-400">
+              Drag and drop files here, or click to browse. Files will be added to Imports.
+            </p>
+            <p className="mt-1 text-xs text-gray-600">You can select multiple files</p>
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="mt-4 flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500"
+            >
+              <Folder size={16} />
+              Browse Files
+            </button>
+          </div>
         </div>
+
+        {/* Staged file list */}
+        {stagedFiles.length > 0 && (
+          <div className="border-t border-gray-800 px-5 py-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-300">Selected Files ({fileCount})</span>
+              <button onClick={() => setStagedFiles([])} className="text-xs text-gray-500 hover:text-white">Clear all</button>
+            </div>
+            <div className="max-h-32 overflow-y-auto space-y-1">
+              {stagedFiles.map((f) => (
+                <div key={f.name} className="flex items-center gap-2 rounded bg-gray-800/50 px-3 py-1.5">
+                  <File size={14} className="shrink-0 text-blue-400" />
+                  <span className="flex-1 truncate text-xs text-gray-300">{f.name}</span>
+                  <span className="shrink-0 text-[10px] text-gray-600">{formatSize(f.size)}</span>
+                  <button onClick={() => removeFile(f.name)} className="shrink-0 text-gray-600 hover:text-red-400">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Error */}
+        {error && <div className="px-5 pb-2"><p className="text-xs text-red-400">{error}</p></div>}
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 border-t border-gray-800 px-5 py-3">
+          <button onClick={onClose} className="text-sm text-gray-400 hover:text-white">Cancel</button>
+          <button
+            onClick={uploadAll}
+            disabled={fileCount === 0 || uploading}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {uploading ? 'Uploading...' : `Add ${fileCount || ''} File${fileCount !== 1 ? 's' : ''}`}
+          </button>
+        </div>
+
         <input
           ref={fileRef}
           type="file"
           accept=".psd,.png,.jpg,.jpeg"
+          multiple
           className="hidden"
           onChange={handleFileChange}
         />
-        {uploading && <p className="mt-3 text-xs text-blue-400">Uploading...</p>}
-        {error && <p className="mt-3 text-xs text-red-400">{error}</p>}
       </div>
     </div>
   );

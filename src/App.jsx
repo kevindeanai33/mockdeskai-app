@@ -324,6 +324,7 @@ export default function App() {
       setActiveTabId(tab.id);
       setIsLoading(false);
     } catch (err) {
+      console.error('Failed to parse PSD:', err);
       setIsLoading(false);
       setParseError(err instanceof Error ? err.message : 'Failed to parse PSD file.');
     }
