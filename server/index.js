@@ -10,11 +10,16 @@ const path = require('path');
 const express = require('express');
 const { WebSocketServer } = require('ws');
 const { startStream, cancelStream, checkClaudeAvailable } = require('./claude');
+const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, WORKSPACE_DIR } = require('./workspace');
 
 function startServer(port) {
   return new Promise((resolve) => {
     const app = express();
     app.use(express.json());
+
+    // Initialize workspace on server start
+    const workspacePath = initWorkspace();
+    console.log(`Workspace: ${workspacePath}`);
 
     // Serve static frontend (production build)
     const distPath = path.join(__dirname, '..', 'dist');
@@ -23,8 +28,41 @@ function startServer(port) {
     // Health + CLI status endpoint
     app.get('/api/status', async (_req, res) => {
       const claude = await checkClaudeAvailable();
-      res.json({ ok: true, claude });
+      res.json({ ok: true, claude, workspace: workspacePath });
     });
+
+    // Workspace file tree
+    app.get('/api/files', (_req, res) => {
+      const tree = getFileTree();
+      res.json({ workspace: workspacePath, tree });
+    });
+
+    // Read a file from workspace (for opening PSDs)
+    app.get('/api/files/read', (req, res) => {
+      const filePath = req.query.path;
+      if (!filePath) return res.status(400).json({ error: 'path required' });
+      try {
+        const fullPath = resolveWorkspacePath(filePath);
+        res.sendFile(fullPath);
+      } catch (err) {
+        res.status(400).json({ error: err.message });
+      }
+    });
+
+    // Import a file from anywhere on disk into workspace
+    app.post('/api/files/import', (req, res) => {
+      const { sourcePath, destDir } = req.body;
+      if (!sourcePath) return res.status(400).json({ error: 'sourcePath required' });
+      try {
+        const relativePath = importFile(sourcePath, destDir);
+        res.json({ path: relativePath });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    // Serve workspace files statically (for PSD loading)
+    app.use('/workspace', express.static(WORKSPACE_DIR));
 
     // SPA fallback (Express 5 requires named param for wildcard)
     app.get('/{*splat}', (_req, res) => {

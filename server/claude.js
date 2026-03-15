@@ -94,8 +94,10 @@ class ClaudeStream extends EventEmitter {
 
     const claudeBin = getClaudePath();
 
-    // Spawn directly using the resolved path
+    // Spawn in the workspace directory so Claude picks up CLAUDE.md
+    const workspaceDir = path.join(os.homedir(), 'MockDeskAI');
     this.process = spawn(claudeBin, args, {
+      cwd: fs.existsSync(workspaceDir) ? workspaceDir : os.homedir(),
       env: { ...process.env, PATH: `${path.dirname(claudeBin)}:${process.env.PATH || ''}` },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

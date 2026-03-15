@@ -39,6 +39,7 @@ import {
   stripJsonCommandBlocks,
 } from '@/services/psdJsonContext';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import FileTree from './FileTree';
 
 function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -386,8 +387,8 @@ export default function App() {
   }, [psdDoc]);
 
   const handleMouseDown = useCallback((e) => {
-    // Space+click, middle click, or alt+click to pan
-    if (spaceHeldRef.current || e.button === 1 || (e.button === 0 && e.altKey)) {
+    // Left click to pan (always — this is a viewer, not a drawing tool)
+    if (e.button === 0 || e.button === 1) {
       e.preventDefault();
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
@@ -411,12 +412,14 @@ export default function App() {
     setPanOffset({ x: 0, y: 0 });
   }, []);
 
-  // Reset zoom/pan when loading a new file
+  // Reset zoom/pan and collapse all groups when loading a new file
   useEffect(() => {
     if (psdDoc) {
       setZoom(1);
       setPanOffset({ x: 0, y: 0 });
-      setCollapsedGroups(new Set());
+      // Collapse all groups by default
+      const groupIds = new Set(psdDoc.layers.filter((l) => l.type === 'group').map((l) => l.id));
+      setCollapsedGroups(groupIds);
     }
   }, [psdDoc?.fileName]);
 
@@ -599,6 +602,9 @@ export default function App() {
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
+        {/* Left sidebar: File tree */}
+        <FileTree onFileSelect={handleFile} />
+
         {/* Center: Canvas + Chat */}
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Canvas area */}
@@ -612,7 +618,7 @@ export default function App() {
             onDrop={onDrop}
             onDragOver={onDragOver}
             onDragLeave={onDragLeave}
-            style={{ cursor: isPanningRef.current ? 'grabbing' : spaceHeldRef.current ? 'grab' : 'default' }}
+            style={{ cursor: psdDoc ? (isPanningRef.current ? 'grabbing' : 'grab') : 'default' }}
           >
             {psdDoc ? (
               <>
