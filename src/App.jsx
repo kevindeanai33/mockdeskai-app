@@ -349,9 +349,11 @@ export default function App() {
 
   const spaceHeldRef = useRef(false);
 
-  // Track spacebar for pan mode
+  // Track spacebar for pan mode — only when not typing in an input
   useEffect(() => {
     const onKeyDown = (e) => {
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault();
         spaceHeldRef.current = true;
