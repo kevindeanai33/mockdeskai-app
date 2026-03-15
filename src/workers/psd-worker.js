@@ -44,6 +44,8 @@ function handleParse(msg) {
   });
 
   undoStack = [];
+  layerIndex = new Map();
+  buildLayerIndex(activePsd.children || []);
   const layers = extractLayerInfo(activePsd.children || []);
   const composite = renderComposite();
 
@@ -61,28 +63,35 @@ function handleEdit(msg) {
   if (!activePsd) throw new Error('No PSD loaded');
 
   const { command } = msg;
-  const layer = findLayer(activePsd.children || [], command.layer);
-  if (!layer) throw new Error(`Layer '${command.layer}' not found`);
+  // Support both ID-based (UI clicks) and name-based (AI commands) lookups
+  const layer = command.id
+    ? findLayerById(command.id)
+    : findLayerByName(activePsd.children || [], command.layer);
+  if (!layer) throw new Error(`Layer '${command.id || command.layer}' not found`);
+
+  // Store the layer ref key for undo (prefer ID, fall back to name)
+  const layerKey = command.id || command.layer;
+  const lookupForUndo = command.id ? 'id' : 'name';
 
   switch (command.action) {
     case 'set_text': {
-      if (!layer.text) throw new Error(`Layer '${command.layer}' is not a text layer`);
-      undoStack.push({ type: 'text', layerPath: command.layer, oldValue: layer.text.text });
+      if (!layer.text) throw new Error(`Layer '${layerKey}' is not a text layer`);
+      undoStack.push({ type: 'text', layerKey, lookupForUndo, oldValue: layer.text.text });
       layer.text.text = command.value || '';
       break;
     }
     case 'set_visibility': {
-      undoStack.push({ type: 'visibility', layerPath: command.layer, oldValue: layer.hidden });
+      undoStack.push({ type: 'visibility', layerKey, lookupForUndo, oldValue: layer.hidden });
       layer.hidden = !command.visible;
       break;
     }
     case 'set_opacity': {
-      undoStack.push({ type: 'opacity', layerPath: command.layer, oldValue: layer.opacity });
+      undoStack.push({ type: 'opacity', layerKey, lookupForUndo, oldValue: layer.opacity });
       layer.opacity = (command.opacity ?? 255) / 255;
       break;
     }
     case 'set_text_color': {
-      if (!layer.text) throw new Error(`Layer '${command.layer}' is not a text layer`);
+      if (!layer.text) throw new Error(`Layer '${layerKey}' is not a text layer`);
       // TODO: parse command.color hex and apply to text style
       break;
     }
@@ -99,7 +108,9 @@ function handleUndo(msg) {
   if (undoStack.length === 0) throw new Error('Nothing to undo');
 
   const entry = undoStack.pop();
-  const layer = findLayer(activePsd.children || [], entry.layerPath);
+  const layer = entry.lookupForUndo === 'id'
+    ? findLayerById(entry.layerKey)
+    : findLayerByName(activePsd.children || [], entry.layerKey);
   if (!layer) throw new Error('Undo target layer not found');
 
   switch (entry.type) {
@@ -132,29 +143,61 @@ function handleComposite(msg) {
   self.postMessage({ id: msg.id, type: 'composited', composite }, composite ? [composite] : []);
 }
 
-function findLayer(layers, name) {
+// Build a flat index mapping unique IDs to layer references
+let layerIndex = new Map();
+
+function buildLayerIndex(layers, parentPath = '', depth = 0) {
+  if (!layers) return;
+  const nameCount = {};
+  for (const layer of layers) {
+    const name = layer.name || 'Unnamed';
+    nameCount[name] = (nameCount[name] || 0) + 1;
+    const suffix = nameCount[name] > 1 ? `#${nameCount[name]}` : '';
+    // But we need a forward pass to know duplicates, so use index instead
+  }
+  // Use index-based unique ID
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
+    const id = parentPath ? `${parentPath}/${i}` : `${i}`;
+    layerIndex.set(id, layer);
+    if (layer.children) {
+      buildLayerIndex(layer.children, id, depth + 1);
+    }
+  }
+}
+
+function findLayerById(id) {
+  return layerIndex.get(id) || null;
+}
+
+// Legacy: find by name (used by AI commands which reference layer names)
+function findLayerByName(layers, name) {
   const trimmed = name.trim();
   for (const layer of layers) {
     if (layer.name === name || layer.name?.trim() === trimmed) return layer;
     if (layer.children) {
-      const found = findLayer(layer.children, name);
+      const found = findLayerByName(layer.children, name);
       if (found) return found;
     }
   }
   return null;
 }
 
-function extractLayerInfo(layers) {
+function extractLayerInfo(layers, depth = 0, parentPath = '') {
   const result = [];
-  for (const layer of layers) {
+  for (let i = 0; i < layers.length; i++) {
+    const layer = layers[i];
     const isGroup = !!layer.children;
     const isText = !!layer.text;
+    const id = parentPath ? `${parentPath}/${i}` : `${i}`;
 
     const info = {
+      id,
       name: layer.name || 'Unnamed',
       type: isGroup ? 'group' : isText ? 'text' : 'pixel',
       visible: !layer.hidden,
       opacity: Math.round((layer.opacity ?? 1) * 255),
+      depth,
       left: layer.left ?? 0,
       top: layer.top ?? 0,
       width: (layer.right ?? 0) - (layer.left ?? 0),
@@ -170,7 +213,7 @@ function extractLayerInfo(layers) {
     }
 
     result.push(info);
-    if (layer.children) result.push(...extractLayerInfo(layer.children));
+    if (layer.children) result.push(...extractLayerInfo(layer.children, depth + 1, id));
   }
   return result;
 }

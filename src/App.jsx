@@ -287,12 +287,12 @@ export default function App() {
 
   // ---- Layer visibility ----
 
-  const toggleLayerVisibility = useCallback(async (layerName, currentlyVisible) => {
+  const toggleLayerVisibility = useCallback(async (layerId, currentlyVisible) => {
     if (!psdDoc) return;
     try {
       const rgba = await editPsd({
         action: 'set_visibility',
-        layer: layerName,
+        id: layerId,
         visible: !currentlyVisible,
       });
       const dataUrl = rgbaToDataUrl(rgba, psdDoc.width, psdDoc.height);
@@ -303,7 +303,7 @@ export default function App() {
           ...prev,
           compositeDataUrl: dataUrl,
           layers: prev.layers.map((l) =>
-            l.name === layerName ? { ...l, visible: !l.visible } : l
+            l.id === layerId ? { ...l, visible: !l.visible } : l
           ),
         };
       });
@@ -642,13 +642,14 @@ export default function App() {
               <span className="ml-auto text-xs text-gray-500">{psdDoc.layers.length}</span>
             </div>
             <nav className="flex-1 overflow-y-auto" aria-label="Layer list">
-              {psdDoc.layers.map((layer, idx) => (
+              {psdDoc.layers.map((layer) => (
                 <div
-                  key={`${layer.name}-${idx}`}
-                  className="flex items-center gap-2 border-b border-gray-800/50 px-3 py-2 hover:bg-gray-800/50"
+                  key={layer.id}
+                  className="flex items-center gap-2 border-b border-gray-800/50 py-2 hover:bg-gray-800/50"
+                  style={{ paddingLeft: `${12 + (layer.depth || 0) * 16}px`, paddingRight: '12px' }}
                 >
                   <button
-                    onClick={() => toggleLayerVisibility(layer.name, layer.visible)}
+                    onClick={() => toggleLayerVisibility(layer.id, layer.visible)}
                     className="shrink-0 text-gray-400 transition-colors hover:text-white"
                   >
                     {layer.visible
