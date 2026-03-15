@@ -661,34 +661,34 @@ export default function App() {
         )}
       </header>
 
-      {tabs.length > 0 && (
-        <div className="flex h-8 shrink-0 items-end gap-0 border-b border-gray-800 bg-gray-900 overflow-x-auto">
-          {tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`group flex h-full items-center gap-1.5 px-3 text-xs cursor-pointer border-b-2 transition-colors ${
-                tab.id === activeTabId
-                  ? 'bg-gray-800 text-white border-blue-500'
-                  : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/50'
-              }`}
-              onClick={() => setActiveTabId(tab.id)}
-            >
-              <span className="truncate max-w-[120px]">{tab.fileName}</span>
-              <button
-                className="ml-1 shrink-0 text-gray-600 hover:text-red-400 transition-colors"
-                onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
-              >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="flex flex-1 overflow-hidden">
         <FileTree onFileSelect={handleFile} />
 
         <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Tab bar */}
+          {tabs.length > 0 && (
+            <div className="flex h-8 shrink-0 items-end gap-0 border-b border-gray-800 bg-gray-900 overflow-x-auto">
+              {tabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  className={`group flex h-full items-center gap-1.5 px-3 text-xs cursor-pointer border-b-2 transition-colors ${
+                    tab.id === activeTabId
+                      ? 'bg-gray-800 text-white border-blue-500'
+                      : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/50'
+                  }`}
+                  onClick={() => setActiveTabId(tab.id)}
+                >
+                  <span className="truncate max-w-[120px]">{tab.fileName}</span>
+                  <button
+                    className="ml-1 shrink-0 text-gray-600 hover:text-red-400 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <div
             ref={canvasContainerRef}
             className="relative flex-1 overflow-hidden bg-gray-950"
