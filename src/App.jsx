@@ -158,6 +158,8 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef(null);
 
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0 });
@@ -173,6 +175,18 @@ export default function App() {
   const renameInputRef = useRef(null);
 
   const [layerContextMenu, setLayerContextMenu] = useState(null); // { x, y, layer }
+
+  // Close export menu on click outside
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handleClick = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showExportMenu]);
 
   const fileInputRef = useRef(null);
   const chatInputRef = useRef(null);
@@ -661,20 +675,8 @@ export default function App() {
   const zoom = activeTab?.zoom || 1;
   const panOffset = activeTab?.panOffset || { x: 0, y: 0 };
 
-  const fileInput = (
-    <input
-      ref={fileInputRef}
-      type="file"
-      accept=".psd"
-      onChange={onFileSelect}
-      className="hidden"
-      aria-hidden="true"
-    />
-  );
-
   return (
     <div className="flex h-screen flex-col bg-gray-950 text-gray-200">
-      {fileInput}
 
       <header className="flex h-12 shrink-0 items-center gap-4 border-b border-gray-800 bg-gray-900 px-4">
         <div className="flex items-center gap-2">
@@ -699,13 +701,6 @@ export default function App() {
 
         <div className="flex-1" />
 
-        <div className="flex items-center gap-1.5">
-          <div className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
-          <span className="text-xs text-gray-500">
-            {isConnected ? 'Connected' : 'Disconnected'}
-          </span>
-        </div>
-
         <div className="flex items-center gap-1.5 rounded-md bg-gray-800/60 px-2 py-1">
           <Sparkles size={13} className={`text-purple-400 ${isStreaming ? 'animate-spin' : ''}`} />
           <span className="text-xs font-medium text-gray-300">Claude</span>
@@ -717,14 +712,6 @@ export default function App() {
           title="Settings"
         >
           <SettingsIcon size={16} />
-        </button>
-
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
-        >
-          <Upload size={14} />
-          Open PSD
         </button>
 
         {psdDoc && (
@@ -741,27 +728,44 @@ export default function App() {
               Layers
             </button>
 
-            <button
-              onClick={() => handleExport('png')}
-              className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
-            >
-              <Download size={14} />
-              PNG
-            </button>
-
-            <button
-              onClick={() => handleExport('jpg')}
-              className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
-            >
-              <Download size={14} />
-              JPG
-            </button>
+            <div className="relative" ref={exportMenuRef}>
+              <button
+                onClick={() => setShowExportMenu((s) => !s)}
+                className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
+              >
+                <Download size={14} />
+                Export
+                <ChevronDown size={12} />
+              </button>
+              {showExportMenu && (
+                <div className="absolute right-0 top-full mt-1 z-50 min-w-[120px] rounded-lg border border-gray-700 bg-gray-900 py-1 shadow-xl">
+                  <button
+                    onClick={() => { handleExport('png'); setShowExportMenu(false); }}
+                    className="flex w-full items-center px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                  >
+                    Export as PNG
+                  </button>
+                  <button
+                    onClick={() => { handleExport('jpg'); setShowExportMenu(false); }}
+                    className="flex w-full items-center px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                  >
+                    Export as JPG
+                  </button>
+                  <button
+                    onClick={() => { handleExport('psd'); setShowExportMenu(false); }}
+                    className="flex w-full items-center px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                  >
+                    Export as PSD
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         )}
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <FileTree onFileSelect={handleFile} />
+        <FileTree onFileSelect={handleFile} isConnected={isConnected} />
 
         <div className="flex flex-1 flex-col overflow-hidden">
           {/* Tab bar */}

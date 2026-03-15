@@ -383,7 +383,7 @@ function UploadModal({ onClose, onUploadDone }) {
   );
 }
 
-export default function FileTree({ onFileSelect }) {
+export default function FileTree({ onFileSelect, isConnected }) {
   const [tree, setTree] = useState([]);
   const [workspace, setWorkspace] = useState('');
   const [expandedDirs, setExpandedDirs] = useState(new Set());
@@ -675,10 +675,14 @@ export default function FileTree({ onFileSelect }) {
           ))
         )}
       </nav>
-      <div className="border-t border-gray-800 px-3 py-2">
-        <p className="truncate text-[10px] text-gray-600" title={workspace}>
-          ~/MockDeskAI
-        </p>
+      <div className="flex items-center gap-2 border-t border-gray-800 px-3 py-2">
+        <span className="relative flex h-2 w-2">
+          {isConnected && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />}
+          <span className={`relative inline-flex h-2 w-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`} />
+        </span>
+        <span className={`text-[11px] font-medium ${isConnected ? 'text-green-400' : 'text-red-400'}`}>
+          {isConnected ? 'Online' : 'Offline'}
+        </span>
       </div>
       {showUpload && (
         <UploadModal
