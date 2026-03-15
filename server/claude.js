@@ -5,8 +5,58 @@
  * Ported from telcoOS-webapp/server/src/services/claude.ts
  */
 
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const { EventEmitter } = require('events');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+/**
+ * Find the claude CLI binary by checking known install locations.
+ * Packaged Electron apps don't inherit the user's full shell PATH.
+ */
+function findClaudePath() {
+  const home = os.homedir();
+  const candidates = [
+    // npm global installs
+    path.join(home, '.local', 'bin', 'claude'),
+    path.join(home, '.local', 'share', 'claude', 'local', 'claude'),
+    // nvm / fnm / volta node paths
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+    path.join(home, '.nvm', 'versions', 'node'),  // checked below
+    // npx global
+    path.join(home, '.npm-global', 'bin', 'claude'),
+  ];
+
+  // Check direct paths first
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    } catch {}
+  }
+
+  // Try to find it via shell (works when running from terminal, not packaged)
+  try {
+    const result = execFileSync('/bin/bash', ['-l', '-c', 'which claude'], {
+      timeout: 3000,
+      encoding: 'utf-8',
+    });
+    const found = result.trim();
+    if (found && fs.existsSync(found)) return found;
+  } catch {}
+
+  return null;
+}
+
+// Cache the resolved path
+let _claudePath = null;
+function getClaudePath() {
+  if (_claudePath === null) {
+    _claudePath = findClaudePath() || 'claude'; // fallback to bare name
+  }
+  return _claudePath;
+}
 
 class ClaudeStream extends EventEmitter {
   constructor(streamId, sessionId) {
@@ -42,19 +92,11 @@ class ClaudeStream extends EventEmitter {
 
     args.push(message);
 
-    // Escape for shell
-    const escapedArgs = ['claude', ...args]
-      .map(arg => `'${arg.replace(/'/g, "'\\''")}'`)
-      .join(' ');
+    const claudeBin = getClaudePath();
 
-    // Spawn via login shell for PATH resolution
-    const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
-    const shellArgs = process.platform === 'win32'
-      ? ['/c', `claude ${args.map(a => `"${a}"`).join(' ')}`]
-      : ['-l', '-c', escapedArgs];
-
-    this.process = spawn(shell, shellArgs, {
-      env: { ...process.env },
+    // Spawn directly using the resolved path
+    this.process = spawn(claudeBin, args, {
+      env: { ...process.env, PATH: `${path.dirname(claudeBin)}:${process.env.PATH || ''}` },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -164,12 +206,16 @@ function cancelAllStreams() {
  */
 function checkClaudeAvailable() {
   return new Promise((resolve) => {
-    const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
-    const args = process.platform === 'win32'
-      ? ['/c', 'claude --version']
-      : ['-l', '-c', 'claude --version'];
+    const claudeBin = findClaudePath();
+    if (!claudeBin || claudeBin === 'claude') {
+      resolve({ available: false });
+      return;
+    }
 
-    const proc = spawn(shell, args, {
+    // Cache it
+    _claudePath = claudeBin;
+
+    const proc = spawn(claudeBin, ['--version'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5000,
     });
@@ -179,7 +225,7 @@ function checkClaudeAvailable() {
 
     proc.on('close', (code) => {
       resolve(code === 0
-        ? { available: true, version: stdout.trim() }
+        ? { available: true, version: stdout.trim(), path: claudeBin }
         : { available: false }
       );
     });
