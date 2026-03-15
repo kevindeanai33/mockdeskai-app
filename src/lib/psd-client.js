@@ -37,17 +37,33 @@ function send(msg, transfer) {
   });
 }
 
-export async function parsePsd(file) {
+// Track which file is currently loaded in the worker
+let _loadedFileKey = null;
+
+export function getLoadedFileKey() { return _loadedFileKey; }
+
+export async function parsePsd(file, fileKey) {
   const buffer = (file instanceof ArrayBuffer) ? file
     : (typeof file.arrayBuffer === 'function') ? await file.arrayBuffer()
     : file;
-  const result = await send({ type: 'parse', buffer }, [buffer]);
+  // Make a copy for the worker (transfer detaches the original)
+  const copy = buffer.slice(0);
+  const result = await send({ type: 'parse', buffer: copy }, [copy]);
+  _loadedFileKey = fileKey || null;
   return {
     width: result.width,
     height: result.height,
     layers: result.layers,
     compositeRgba: result.composite,
+    rawBuffer: buffer,  // Keep original for re-parsing on tab switch
   };
+}
+
+export async function ensureLoaded(rawBuffer, fileKey) {
+  if (_loadedFileKey === fileKey) return;
+  const copy = rawBuffer.slice(0);
+  await send({ type: 'parse', buffer: copy }, [copy]);
+  _loadedFileKey = fileKey;
 }
 
 export async function editPsd(command) {

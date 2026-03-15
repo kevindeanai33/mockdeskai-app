@@ -25,7 +25,7 @@ import {
   Maximize,
   Trash2,
 } from 'lucide-react';
-import { parsePsd, editPsd, undoPsd, renameLayer, deleteLayer, rgbaToDataUrl } from '@/lib/psd-client';
+import { parsePsd, editPsd, undoPsd, renameLayer, deleteLayer, rgbaToDataUrl, ensureLoaded } from '@/lib/psd-client';
 import {
   buildPsdJsonContext,
   extractJsonCommands,
@@ -306,7 +306,7 @@ export default function App() {
     setParseError(null);
 
     try {
-      const doc = await parsePsd(file);
+      const doc = await parsePsd(file, file.name);
       const dataUrl = rgbaToDataUrl(doc.compositeRgba, doc.width, doc.height);
 
       const psdDoc = {
@@ -315,6 +315,7 @@ export default function App() {
         layers: doc.layers,
         compositeDataUrl: dataUrl,
         fileName: file.name,
+        rawBuffer: doc.rawBuffer,
       };
 
       const savedHistory = await loadChatFromServer(file.name);
@@ -352,6 +353,7 @@ export default function App() {
   const toggleLayerVisibility = useCallback(async (layerId, currentlyVisible) => {
     if (!activeTab?.psdDoc) return;
     try {
+      await ensureLoaded(activeTab.psdDoc.rawBuffer, activeTab.psdDoc.fileName);
       const rgba = await editPsd({
         action: 'set_visibility',
         id: layerId,
@@ -376,6 +378,7 @@ export default function App() {
   const handleLayerRename = useCallback(async (layerId, newName) => {
     if (!activeTab?.psdDoc || !newName.trim()) return;
     try {
+      await ensureLoaded(activeTab.psdDoc.rawBuffer, activeTab.psdDoc.fileName);
       const result = await renameLayer(layerId, newName.trim());
       updateActiveTab({
         psdDoc: {
@@ -393,6 +396,7 @@ export default function App() {
   const handleLayerDelete = useCallback(async (layerId) => {
     if (!activeTab?.psdDoc) return;
     try {
+      await ensureLoaded(activeTab.psdDoc.rawBuffer, activeTab.psdDoc.fileName);
       const result = await deleteLayer(layerId);
       const dataUrl = rgbaToDataUrl(result.composite, activeTab.psdDoc.width, activeTab.psdDoc.height);
       updateActiveTab({
@@ -410,6 +414,7 @@ export default function App() {
   const handleUndo = useCallback(async (entryId) => {
     if (!activeTab?.psdDoc) return;
     try {
+      await ensureLoaded(activeTab.psdDoc.rawBuffer, activeTab.psdDoc.fileName);
       const rgba = await undoPsd();
       const dataUrl = rgbaToDataUrl(rgba, activeTab.psdDoc.width, activeTab.psdDoc.height);
       const newHistory = activeTab.editHistory.filter((e) => e.id !== entryId);
