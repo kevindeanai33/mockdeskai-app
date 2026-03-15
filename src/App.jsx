@@ -101,7 +101,6 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [showLayers, setShowLayers] = useState(true);
-  const [dragOver, setDragOver] = useState(false);
   const [parseError, setParseError] = useState(null);
   const [claudeStatus, setClaudeStatus] = useState(null);
 
@@ -305,7 +304,6 @@ export default function App() {
 
     setIsLoading(true);
     setParseError(null);
-    setDragOver(false);
 
     try {
       const doc = await parsePsd(file);
@@ -344,26 +342,6 @@ export default function App() {
       return next;
     });
   }, [activeTabId]);
-
-  const onDrop = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) handleFile(file);
-  }, [handleFile]);
-
-  const onDragOver = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(true);
-  }, []);
-
-  const onDragLeave = useCallback((e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragOver(false);
-  }, []);
 
   const onFileSelect = useCallback((e) => {
     const file = e.target.files?.[0];
@@ -712,9 +690,6 @@ export default function App() {
             onMouseMove={psdDoc ? handleMouseMove : undefined}
             onMouseUp={psdDoc ? handleMouseUp : undefined}
             onMouseLeave={psdDoc ? handleMouseUp : undefined}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onDragLeave={onDragLeave}
             style={{ cursor: psdDoc ? (isPanningRef.current ? 'grabbing' : 'grab') : 'default' }}
           >
             {psdDoc ? (
@@ -748,16 +723,8 @@ export default function App() {
                 </div>
               </>
             ) : (
-              <div
-                className="absolute inset-0 flex items-center justify-center"
-                onClick={() => fileInputRef.current?.click()}
-                style={{ cursor: 'pointer' }}
-              >
-                <div className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-12 py-16 transition-all ${
-                  dragOver
-                    ? 'border-blue-500 bg-blue-500/10'
-                    : 'border-gray-800 hover:border-gray-600'
-                }`}>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="flex flex-col items-center justify-center px-12 py-16">
                   {isLoading ? (
                     <>
                       <Loader2 size={40} className="mb-3 animate-spin text-blue-500" />
@@ -765,9 +732,8 @@ export default function App() {
                     </>
                   ) : (
                     <>
-                      <Upload size={40} className="mb-3 text-gray-600" />
-                      <p className="text-sm font-medium text-gray-300">Drop a PSD file or click to open</p>
-                      <p className="mt-1 text-xs text-gray-500">Accepts .psd files</p>
+                      <FileImage size={40} className="mb-3 text-gray-700" />
+                      <p className="text-sm font-medium text-gray-400">Open a PSD from the file tree</p>
                     </>
                   )}
                   {parseError && (

@@ -12,6 +12,7 @@ const os = require('os');
 const WORKSPACE_DIR = path.join(os.homedir(), 'MockDeskAI');
 const CLAUDE_DIR = path.join(WORKSPACE_DIR, '.claude');
 const EXPORTS_DIR = path.join(WORKSPACE_DIR, 'Exports');
+const IMPORTS_DIR = path.join(WORKSPACE_DIR, 'Imports');
 
 const CLAUDE_MD = `# MockDeskAI Workspace
 
@@ -40,7 +41,7 @@ Respond with JSON code blocks to modify the PSD:
  */
 function initWorkspace() {
   // Create directories
-  for (const dir of [WORKSPACE_DIR, CLAUDE_DIR, EXPORTS_DIR]) {
+  for (const dir of [WORKSPACE_DIR, CLAUDE_DIR, EXPORTS_DIR, IMPORTS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -203,6 +204,63 @@ function loadChatHistory(fileName) {
   }
 }
 
+/**
+ * Move a multer-uploaded file into the workspace
+ */
+function moveUploadedFile(multerFile, destDir) {
+  const targetDir = path.resolve(WORKSPACE_DIR, destDir);
+  if (!targetDir.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+  const destPath = path.join(targetDir, multerFile.originalname);
+  if (!destPath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  fs.renameSync(multerFile.path, destPath);
+  return path.relative(WORKSPACE_DIR, destPath);
+}
+
+/**
+ * Rename a file or folder within the workspace
+ */
+function renameFile(oldRelPath, newName) {
+  const oldPath = path.resolve(WORKSPACE_DIR, oldRelPath);
+  if (!oldPath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  const dir = path.dirname(oldPath);
+  const newPath = path.join(dir, newName);
+  if (!newPath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  fs.renameSync(oldPath, newPath);
+  return path.relative(WORKSPACE_DIR, newPath);
+}
+
+/**
+ * Delete a file or folder from the workspace
+ */
+function deleteFile(relPath) {
+  const fullPath = path.resolve(WORKSPACE_DIR, relPath);
+  if (!fullPath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  if (!fs.existsSync(fullPath)) throw new Error('File not found');
+  if (fs.statSync(fullPath).isDirectory()) {
+    fs.rmSync(fullPath, { recursive: true });
+  } else {
+    fs.unlinkSync(fullPath);
+  }
+}
+
+/**
+ * Move a file or folder to a different directory within the workspace
+ */
+function moveFile(srcRelPath, destDirRelPath) {
+  const srcPath = path.resolve(WORKSPACE_DIR, srcRelPath);
+  const destDir = path.resolve(WORKSPACE_DIR, destDirRelPath);
+  if (!srcPath.startsWith(WORKSPACE_DIR) || !destDir.startsWith(WORKSPACE_DIR)) {
+    throw new Error('Path traversal detected');
+  }
+  if (!fs.existsSync(srcPath)) throw new Error('Source not found');
+  if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+  const destPath = path.join(destDir, path.basename(srcPath));
+  if (!destPath.startsWith(WORKSPACE_DIR)) throw new Error('Path traversal detected');
+  fs.renameSync(srcPath, destPath);
+  return path.relative(WORKSPACE_DIR, destPath);
+}
+
 module.exports = {
   WORKSPACE_DIR,
   initWorkspace,
@@ -211,6 +269,10 @@ module.exports = {
   resolveWorkspacePath,
   createDirectory,
   uploadFile,
+  moveUploadedFile,
+  renameFile,
+  deleteFile,
+  moveFile,
   searchFiles,
   saveChatHistory,
   loadChatHistory,

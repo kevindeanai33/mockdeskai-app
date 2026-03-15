@@ -13,6 +13,10 @@ import {
   Upload,
   Search,
   X,
+  Download,
+  Copy,
+  Trash2,
+  Pencil,
 } from 'lucide-react';
 
 function FileIcon({ ext }) {
@@ -44,20 +48,124 @@ function filterTree(nodes, query) {
     });
 }
 
-function TreeNode({ node, depth = 0, onFileClick, expandedDirs, toggleDir }) {
+function ContextMenu({ x, y, items, onClose }) {
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClick = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        onClose();
+      }
+    };
+    const handleKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed z-[100] min-w-[140px] rounded-md border border-gray-700 bg-gray-900 py-1 shadow-xl"
+      style={{ left: x, top: y }}
+    >
+      {items.map((item, i) => (
+        <button
+          key={i}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-gray-300 transition-colors hover:bg-gray-800 hover:text-white"
+          onClick={() => {
+            item.action();
+            onClose();
+          }}
+        >
+          {item.icon}
+          {item.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TreeNode({
+  node,
+  depth = 0,
+  onFileClick,
+  expandedDirs,
+  toggleDir,
+  renamingPath,
+  renameValue,
+  setRenamingPath,
+  setRenameValue,
+  onRenameSubmit,
+  onContextMenu,
+  onDragStartNode,
+  onDropOnFolder,
+  dragOverPath,
+  setDragOverPath,
+}) {
   const isDir = node.type === 'directory';
   const isExpanded = expandedDirs.has(node.path);
   const isPsd = node.ext === '.psd';
+  const isRenaming = renamingPath === node.path;
+  const isDragOver = dragOverPath === node.path && isDir;
+
+  const handleDragStart = (e) => {
+    e.dataTransfer.setData('text/plain', node.path);
+    e.dataTransfer.effectAllowed = 'move';
+    onDragStartNode(node.path);
+  };
+
+  const handleDragOver = (e) => {
+    if (!isDir) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverPath(node.path);
+  };
+
+  const handleDragLeave = (e) => {
+    e.stopPropagation();
+    if (dragOverPath === node.path) {
+      setDragOverPath(null);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverPath(null);
+    const srcPath = e.dataTransfer.getData('text/plain');
+    if (srcPath && srcPath !== node.path && isDir) {
+      onDropOnFolder(srcPath, node.path);
+    }
+  };
 
   return (
     <>
       <div
-        className={`flex items-center gap-1.5 py-1 hover:bg-gray-800/50 ${isPsd ? 'cursor-pointer' : ''}`}
+        className={`group/node flex items-center gap-1.5 py-1 hover:bg-gray-800/50 ${
+          isPsd ? 'cursor-pointer' : ''
+        } ${isDragOver ? 'bg-blue-500/20 outline outline-1 outline-blue-500' : ''}`}
         style={{ paddingLeft: `${8 + depth * 14}px`, paddingRight: '8px' }}
         onClick={() => {
           if (isDir) toggleDir(node.path);
           else if (isPsd) onFileClick(node.path);
         }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onContextMenu(e, node);
+        }}
+        draggable
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
         {isDir ? (
           <>
@@ -75,10 +183,33 @@ function TreeNode({ node, depth = 0, onFileClick, expandedDirs, toggleDir }) {
             <FileIcon ext={node.ext} />
           </>
         )}
-        <span className={`flex-1 truncate text-xs ${isPsd ? 'text-gray-200 font-medium' : 'text-gray-400'}`}>
-          {node.name}
-        </span>
-        {!isDir && node.size && (
+        {isRenaming ? (
+          <input
+            type="text"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') onRenameSubmit();
+              if (e.key === 'Escape') { setRenamingPath(null); setRenameValue(''); }
+            }}
+            onBlur={onRenameSubmit}
+            className="flex-1 min-w-0 rounded border border-blue-500 bg-gray-800 px-1 py-0 text-xs text-white outline-none"
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            className={`flex-1 truncate text-xs ${isPsd ? 'text-gray-200 font-medium' : 'text-gray-400'}`}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setRenamingPath(node.path);
+              setRenameValue(node.name);
+            }}
+          >
+            {node.name}
+          </span>
+        )}
+        {!isDir && node.size && !isRenaming && (
           <span className="shrink-0 text-[10px] text-gray-600">{formatSize(node.size)}</span>
         )}
       </div>
@@ -90,6 +221,16 @@ function TreeNode({ node, depth = 0, onFileClick, expandedDirs, toggleDir }) {
           onFileClick={onFileClick}
           expandedDirs={expandedDirs}
           toggleDir={toggleDir}
+          renamingPath={renamingPath}
+          renameValue={renameValue}
+          setRenamingPath={setRenamingPath}
+          setRenameValue={setRenameValue}
+          onRenameSubmit={onRenameSubmit}
+          onContextMenu={onContextMenu}
+          onDragStartNode={onDragStartNode}
+          onDropOnFolder={onDropOnFolder}
+          dragOverPath={dragOverPath}
+          setDragOverPath={setDragOverPath}
         />
       ))}
     </>
@@ -106,14 +247,12 @@ function UploadModal({ onClose, onUploadDone }) {
     setUploading(true);
     setError(null);
     try {
-      const buf = await file.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(buf).reduce((data, byte) => data + String.fromCharCode(byte), '')
-      );
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('destDir', 'Imports');
       const res = await fetch('/api/files/upload', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: file.name, data: base64 }),
+        body: formData,
       });
       if (!res.ok) {
         const d = await res.json();
@@ -189,6 +328,17 @@ export default function FileTree({ onFileSelect }) {
   const [newDirName, setNewDirName] = useState('');
   const newDirRef = useRef(null);
 
+  // Rename state
+  const [renamingPath, setRenamingPath] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState(null);
+
+  // Drag-drop state
+  const [dragSourcePath, setDragSourcePath] = useState(null);
+  const [dragOverPath, setDragOverPath] = useState(null);
+
   const loadTree = useCallback(async () => {
     setLoading(true);
     try {
@@ -246,6 +396,100 @@ export default function FileTree({ onFileSelect }) {
       console.error('Failed to create directory:', err);
     }
   };
+
+  const handleRenameSubmit = useCallback(async () => {
+    if (!renamingPath || !renameValue.trim()) {
+      setRenamingPath(null);
+      setRenameValue('');
+      return;
+    }
+    try {
+      await fetch('/api/files/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: renamingPath, newName: renameValue.trim() }),
+      });
+      loadTree();
+    } catch (err) {
+      console.error('Failed to rename:', err);
+    }
+    setRenamingPath(null);
+    setRenameValue('');
+  }, [renamingPath, renameValue, loadTree]);
+
+  const handleDelete = useCallback(async (filePath) => {
+    try {
+      await fetch('/api/files/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath }),
+      });
+      loadTree();
+    } catch (err) {
+      console.error('Failed to delete:', err);
+    }
+  }, [loadTree]);
+
+  const handleMoveFile = useCallback(async (srcPath, destDir) => {
+    if (srcPath === destDir) return;
+    // Don't allow dropping a folder into itself
+    if (destDir.startsWith(srcPath + '/')) return;
+    try {
+      await fetch('/api/files/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ srcPath, destDir }),
+      });
+      loadTree();
+    } catch (err) {
+      console.error('Failed to move file:', err);
+    }
+  }, [loadTree]);
+
+  const handleContextMenu = useCallback((e, node) => {
+    const isDir = node.type === 'directory';
+    const items = [];
+
+    items.push({
+      label: 'Rename',
+      icon: <Pencil size={12} />,
+      action: () => {
+        setRenamingPath(node.path);
+        setRenameValue(node.name);
+      },
+    });
+
+    if (!isDir) {
+      items.push({
+        label: 'Download',
+        icon: <Download size={12} />,
+        action: () => {
+          const a = document.createElement('a');
+          a.href = `/api/files/read?path=${encodeURIComponent(node.path)}`;
+          a.download = node.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        },
+      });
+    }
+
+    items.push({
+      label: 'Copy Name',
+      icon: <Copy size={12} />,
+      action: () => {
+        navigator.clipboard.writeText(node.name).catch(() => {});
+      },
+    });
+
+    items.push({
+      label: 'Delete',
+      icon: <Trash2 size={12} />,
+      action: () => handleDelete(node.path),
+    });
+
+    setContextMenu({ x: e.clientX, y: e.clientY, items });
+  }, [handleDelete]);
 
   const filteredTree = showHidden ? filterTree(tree, searchQuery) : filterTree(
     tree.filter((n) => !n.name.startsWith('.')),
@@ -349,6 +593,16 @@ export default function FileTree({ onFileSelect }) {
               onFileClick={handleFileClick}
               expandedDirs={expandedDirs}
               toggleDir={toggleDir}
+              renamingPath={renamingPath}
+              renameValue={renameValue}
+              setRenamingPath={setRenamingPath}
+              setRenameValue={setRenameValue}
+              onRenameSubmit={handleRenameSubmit}
+              onContextMenu={handleContextMenu}
+              onDragStartNode={setDragSourcePath}
+              onDropOnFolder={handleMoveFile}
+              dragOverPath={dragOverPath}
+              setDragOverPath={setDragOverPath}
             />
           ))
         )}
@@ -362,6 +616,14 @@ export default function FileTree({ onFileSelect }) {
         <UploadModal
           onClose={() => setShowUpload(false)}
           onUploadDone={loadTree}
+        />
+      )}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </aside>

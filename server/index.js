@@ -6,11 +6,15 @@
  */
 
 const http = require('http');
+const os = require('os');
 const path = require('path');
 const express = require('express');
+const multer = require('multer');
 const { WebSocketServer } = require('ws');
 const { startStream, cancelStream, checkClaudeAvailable } = require('./claude');
-const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, createDirectory, uploadFile, searchFiles, saveChatHistory, loadChatHistory, WORKSPACE_DIR } = require('./workspace');
+const { initWorkspace, getFileTree, importFile, resolveWorkspacePath, createDirectory, uploadFile, moveUploadedFile, renameFile, deleteFile, moveFile, searchFiles, saveChatHistory, loadChatHistory, WORKSPACE_DIR } = require('./workspace');
+
+const upload = multer({ dest: path.join(os.tmpdir(), 'mockdeskai-uploads') });
 
 function startServer(port) {
   return new Promise((resolve) => {
@@ -61,11 +65,11 @@ function startServer(port) {
       }
     });
 
-    app.post('/api/files/upload', (req, res) => {
-      const { name, data, destDir } = req.body;
-      if (!name || !data) return res.status(400).json({ error: 'name and data required' });
+    app.post('/api/files/upload', upload.single('file'), (req, res) => {
+      if (!req.file) return res.status(400).json({ error: 'No file provided' });
+      const destDir = req.body.destDir || 'Imports';
       try {
-        const relativePath = uploadFile(name, data, destDir || '');
+        const relativePath = moveUploadedFile(req.file, destDir);
         res.json({ path: relativePath });
       } catch (err) {
         res.status(500).json({ error: err.message });
@@ -88,6 +92,39 @@ function startServer(port) {
       if (!query) return res.status(400).json({ error: 'q required' });
       const results = searchFiles(query);
       res.json({ results });
+    });
+
+    app.post('/api/files/rename', (req, res) => {
+      const { path: filePath, newName } = req.body;
+      if (!filePath || !newName) return res.status(400).json({ error: 'path and newName required' });
+      try {
+        const newPath = renameFile(filePath, newName);
+        res.json({ path: newPath });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post('/api/files/delete', (req, res) => {
+      const { path: filePath } = req.body;
+      if (!filePath) return res.status(400).json({ error: 'path required' });
+      try {
+        deleteFile(filePath);
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+    app.post('/api/files/move', (req, res) => {
+      const { srcPath, destDir } = req.body;
+      if (!srcPath || !destDir) return res.status(400).json({ error: 'srcPath and destDir required' });
+      try {
+        const newPath = moveFile(srcPath, destDir);
+        res.json({ path: newPath });
+      } catch (err) {
+        res.status(500).json({ error: err.message });
+      }
     });
 
     app.post('/api/chats/save', (req, res) => {
