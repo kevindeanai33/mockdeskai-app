@@ -13,6 +13,7 @@ import {
   Type,
   Image as ImageIcon,
   FolderOpen,
+  FolderClosed,
   Send,
   Undo2,
   Download,
@@ -24,6 +25,11 @@ import {
   AlertCircle,
   Wifi,
   WifiOff,
+  ChevronRight,
+  ChevronDown,
+  ZoomIn,
+  ZoomOut,
+  Maximize,
 } from 'lucide-react';
 import { parsePsd, editPsd, undoPsd, rgbaToDataUrl } from '@/lib/psd-client';
 import {
@@ -38,11 +44,13 @@ function generateId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function layerTypeIcon(type) {
+function layerTypeIcon(type, isCollapsed) {
   switch (type) {
     case 'text': return <Type size={14} className="shrink-0 text-blue-400" />;
     case 'pixel': return <ImageIcon size={14} className="shrink-0 text-green-400" />;
-    case 'group': return <FolderOpen size={14} className="shrink-0 text-yellow-400" />;
+    case 'group': return isCollapsed
+      ? <FolderClosed size={14} className="shrink-0 text-yellow-400" />
+      : <FolderOpen size={14} className="shrink-0 text-yellow-400" />;
     default: return <ImageIcon size={14} className="shrink-0 text-gray-400" />;
   }
 }
@@ -69,6 +77,16 @@ export default function App() {
   const [parseError, setParseError] = useState(null);
   const [claudeStatus, setClaudeStatus] = useState(null); // null | 'checking' | 'available' | 'unavailable'
   const [claudeSessionId, setClaudeSessionId] = useState(null);
+
+  // Zoom/pan state
+  const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef({ x: 0, y: 0 });
+  const canvasContainerRef = useRef(null);
+
+  // Collapsed groups in layer panel
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
 
   // Track streaming state per entry
   const streamingEntryRef = useRef(null);
@@ -326,6 +344,71 @@ export default function App() {
     }
   }, [psdDoc]);
 
+  // ---- Zoom/Pan ----
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    setZoom((prev) => Math.min(Math.max(prev + delta, 0.1), 5));
+  }, []);
+
+  const handleMouseDown = useCallback((e) => {
+    // Middle click or space+click for panning
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      isPanningRef.current = true;
+      panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
+    }
+  }, [panOffset]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!isPanningRef.current) return;
+    setPanOffset({
+      x: e.clientX - panStartRef.current.x,
+      y: e.clientY - panStartRef.current.y,
+    });
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    isPanningRef.current = false;
+  }, []);
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
+
+  // Reset zoom/pan when loading a new file
+  useEffect(() => {
+    if (psdDoc) {
+      setZoom(1);
+      setPanOffset({ x: 0, y: 0 });
+      setCollapsedGroups(new Set());
+    }
+  }, [psdDoc?.fileName]);
+
+  // ---- Layer group collapse ----
+
+  const toggleGroupCollapse = useCallback((layerId) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(layerId)) next.delete(layerId);
+      else next.add(layerId);
+      return next;
+    });
+  }, []);
+
+  // Filter layers based on collapsed groups
+  const visibleLayers = psdDoc ? psdDoc.layers.filter((layer) => {
+    // Check if any ancestor group is collapsed
+    const parts = layer.id.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const ancestorId = parts.slice(0, i).join('/');
+      if (collapsedGroups.has(ancestorId)) return false;
+    }
+    return true;
+  }) : [];
+
   // ---- Export ----
 
   const handleExport = useCallback(async (format) => {
@@ -568,14 +651,45 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         {/* Center: Canvas + Chat */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Canvas */}
-          <div className="flex flex-1 items-center justify-center overflow-auto bg-gray-950 p-4">
-            <img
-              src={psdDoc.compositeDataUrl}
-              alt={`PSD composite: ${psdDoc.fileName}`}
-              className="max-h-full max-w-full object-contain"
-              style={{ imageRendering: 'auto', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
-            />
+          {/* Canvas with zoom/pan */}
+          <div
+            ref={canvasContainerRef}
+            className="relative flex-1 overflow-hidden bg-gray-950"
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            style={{ cursor: isPanningRef.current ? 'grabbing' : 'default' }}
+          >
+            <div
+              className="absolute inset-0 flex items-center justify-center"
+              style={{
+                transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                transformOrigin: 'center center',
+              }}
+            >
+              <img
+                src={psdDoc.compositeDataUrl}
+                alt={`PSD composite: ${psdDoc.fileName}`}
+                className="max-h-full max-w-full object-contain select-none"
+                style={{ imageRendering: 'auto', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
+                draggable={false}
+              />
+            </div>
+            {/* Zoom controls */}
+            <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-lg bg-gray-900/80 px-2 py-1 backdrop-blur">
+              <button onClick={() => setZoom((z) => Math.max(z - 0.25, 0.1))} className="p-1 text-gray-400 hover:text-white">
+                <ZoomOut size={14} />
+              </button>
+              <span className="min-w-[3rem] text-center text-xs text-gray-400">{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom((z) => Math.min(z + 0.25, 5))} className="p-1 text-gray-400 hover:text-white">
+                <ZoomIn size={14} />
+              </button>
+              <button onClick={resetView} className="p-1 text-gray-400 hover:text-white" title="Reset view">
+                <Maximize size={14} />
+              </button>
+            </div>
           </div>
 
           {/* Chat area */}
@@ -642,30 +756,59 @@ export default function App() {
               <span className="ml-auto text-xs text-gray-500">{psdDoc.layers.length}</span>
             </div>
             <nav className="flex-1 overflow-y-auto" aria-label="Layer list">
-              {psdDoc.layers.map((layer) => (
-                <div
-                  key={layer.id}
-                  className="flex items-center gap-2 border-b border-gray-800/50 py-2 hover:bg-gray-800/50"
-                  style={{ paddingLeft: `${12 + (layer.depth || 0) * 16}px`, paddingRight: '12px' }}
-                >
-                  <button
-                    onClick={() => toggleLayerVisibility(layer.id, layer.visible)}
-                    className="shrink-0 text-gray-400 transition-colors hover:text-white"
+              {visibleLayers.map((layer) => {
+                const isGroup = layer.type === 'group';
+                const isCollapsed = collapsedGroups.has(layer.id);
+
+                return (
+                  <div
+                    key={layer.id}
+                    className={`flex items-center gap-1.5 border-b border-gray-800/50 py-1.5 hover:bg-gray-800/50 ${isGroup ? 'bg-gray-900/50' : ''}`}
+                    style={{ paddingLeft: `${8 + (layer.depth || 0) * 14}px`, paddingRight: '8px' }}
                   >
-                    {layer.visible
-                      ? <Eye size={14} />
-                      : <EyeOff size={14} className="text-gray-600" />
-                    }
-                  </button>
-                  {layerTypeIcon(layer.type)}
-                  <span
-                    className={`flex-1 truncate text-sm ${layer.visible ? 'text-gray-200' : 'text-gray-500'}`}
-                    title={layer.name}
-                  >
-                    {layer.name}
-                  </span>
-                </div>
-              ))}
+                    {/* Collapse toggle for groups */}
+                    {isGroup ? (
+                      <button
+                        onClick={() => toggleGroupCollapse(layer.id)}
+                        className="shrink-0 p-0.5 text-gray-500 transition-colors hover:text-white"
+                      >
+                        {isCollapsed
+                          ? <ChevronRight size={12} />
+                          : <ChevronDown size={12} />
+                        }
+                      </button>
+                    ) : (
+                      <span className="w-4 shrink-0" />
+                    )}
+
+                    {/* Visibility toggle */}
+                    <button
+                      onClick={() => toggleLayerVisibility(layer.id, layer.visible)}
+                      className="shrink-0 text-gray-400 transition-colors hover:text-white"
+                    >
+                      {layer.visible
+                        ? <Eye size={13} />
+                        : <EyeOff size={13} className="text-gray-600" />
+                      }
+                    </button>
+
+                    {/* Icon */}
+                    {layerTypeIcon(layer.type, isCollapsed)}
+
+                    {/* Name */}
+                    <span
+                      className={`flex-1 truncate text-xs ${
+                        isGroup
+                          ? 'font-medium ' + (layer.visible ? 'text-gray-200' : 'text-gray-500')
+                          : layer.visible ? 'text-gray-300' : 'text-gray-600'
+                      }`}
+                      title={layer.name}
+                    >
+                      {layer.name}
+                    </span>
+                  </div>
+                );
+              })}
             </nav>
           </aside>
         )}
