@@ -346,15 +346,48 @@ export default function App() {
 
   // ---- Zoom/Pan ----
 
-  const handleWheel = useCallback((e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setZoom((prev) => Math.min(Math.max(prev + delta, 0.1), 5));
+  const spaceHeldRef = useRef(false);
+
+  // Track spacebar for pan mode
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.code === 'Space' && !e.repeat) {
+        e.preventDefault();
+        spaceHeldRef.current = true;
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.code === 'Space') {
+        spaceHeldRef.current = false;
+        isPanningRef.current = false;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, []);
 
+  // Attach wheel listener with { passive: false } to avoid preventDefault error
+  useEffect(() => {
+    const el = canvasContainerRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (!psdDoc) return;
+      e.preventDefault();
+      // Smooth zoom — scale by 2% per pixel of scroll
+      const delta = -e.deltaY * 0.002;
+      setZoom((prev) => Math.min(Math.max(prev + prev * delta, 0.05), 8));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [psdDoc]);
+
   const handleMouseDown = useCallback((e) => {
-    // Middle click or space+click for panning
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    // Space+click, middle click, or alt+click to pan
+    if (spaceHeldRef.current || e.button === 1 || (e.button === 0 && e.altKey)) {
       e.preventDefault();
       isPanningRef.current = true;
       panStartRef.current = { x: e.clientX - panOffset.x, y: e.clientY - panOffset.y };
@@ -472,126 +505,24 @@ export default function App() {
   }, [chatInput, psdDoc, isConnected, send, claudeSessionId]);
 
   // =========================================================================
-  // Render: Upload State
+  // Render — always show the full editor layout
   // =========================================================================
 
-  if (!psdDoc) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center bg-gray-950 px-4">
-        {/* Header */}
-        <div className="mb-12 text-center">
-          <div className="mb-3 flex items-center justify-center gap-3">
-            <FileImage size={36} className="text-blue-500" />
-            <h1 className="text-3xl font-bold tracking-tight text-white">
-              MockDeskAI
-            </h1>
-          </div>
-          <p className="text-base text-gray-400">
-            AI-powered design proofing for sales teams
-          </p>
-        </div>
-
-        {/* Status indicators */}
-        <div className="mb-6 flex items-center gap-4 text-sm">
-          <div className="flex items-center gap-1.5">
-            {isConnected
-              ? <Wifi size={14} className="text-green-400" />
-              : <WifiOff size={14} className="text-red-400" />
-            }
-            <span className={isConnected ? 'text-green-400' : 'text-red-400'}>
-              {isConnected ? 'Connected' : 'Disconnected'}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {claudeStatus === 'available' && (
-              <>
-                <Check size={14} className="text-green-400" />
-                <span className="text-green-400">Claude CLI ready</span>
-              </>
-            )}
-            {claudeStatus === 'unavailable' && (
-              <>
-                <AlertCircle size={14} className="text-yellow-400" />
-                <span className="text-yellow-400">Claude CLI not found</span>
-              </>
-            )}
-            {(claudeStatus === 'checking' || claudeStatus === null) && (
-              <>
-                <Loader2 size={14} className="animate-spin text-gray-400" />
-                <span className="text-gray-400">Checking CLI...</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Drop zone */}
-        <div
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onDragLeave={onDragLeave}
-          onClick={() => fileInputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              fileInputRef.current?.click();
-            }
-          }}
-          aria-label="Upload PSD file"
-          className={`flex w-full max-w-lg cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-8 py-16 transition-all ${
-            dragOver
-              ? 'border-blue-500 bg-blue-500/10'
-              : 'border-gray-700 bg-gray-900 hover:border-gray-500 hover:bg-gray-900/80'
-          }`}
-        >
-          {isLoading ? (
-            <>
-              <Loader2 size={48} className="mb-4 animate-spin text-blue-500" />
-              <p className="text-lg font-medium text-white">Parsing PSD file...</p>
-              <p className="mt-1 text-sm text-gray-400">This may take a moment for large files</p>
-            </>
-          ) : (
-            <>
-              <Upload size={48} className="mb-4 text-gray-500" />
-              <p className="text-lg font-medium text-white">Drop a PSD file or click to upload</p>
-              <p className="mt-1 text-sm text-gray-400">Accepts .psd files only</p>
-            </>
-          )}
-        </div>
-
-        {parseError && (
-          <div className="mt-4 rounded-lg border border-red-800 bg-red-900/30 px-4 py-3 text-sm text-red-300">
-            {parseError}
-          </div>
-        )}
-
-        {claudeStatus === 'unavailable' && (
-          <div className="mt-4 max-w-lg rounded-lg border border-yellow-800 bg-yellow-900/20 px-4 py-3 text-sm text-yellow-300">
-            Claude CLI is not installed or not authenticated. Install it from{' '}
-            <span className="font-mono text-yellow-200">npm install -g @anthropic-ai/claude-code</span>{' '}
-            and run <span className="font-mono text-yellow-200">claude auth</span> to set up.
-          </div>
-        )}
-
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".psd"
-          onChange={onFileSelect}
-          className="hidden"
-          aria-hidden="true"
-        />
-      </div>
-    );
-  }
-
-  // =========================================================================
-  // Render: Editor State
-  // =========================================================================
+  // Hidden file input (always present)
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept=".psd"
+      onChange={onFileSelect}
+      className="hidden"
+      aria-hidden="true"
+    />
+  );
 
   return (
     <div className="flex h-screen flex-col bg-gray-950 text-gray-200">
+      {fileInput}
       {/* Toolbar */}
       <header className="flex h-12 shrink-0 items-center gap-4 border-b border-gray-800 bg-gray-900 px-4">
         <div className="flex items-center gap-2">
@@ -601,12 +532,18 @@ export default function App() {
 
         <div className="mx-2 h-5 w-px bg-gray-700" />
 
-        <span className="max-w-[200px] truncate text-sm text-gray-300" title={psdDoc.fileName}>
-          {psdDoc.fileName}
-        </span>
-        <span className="text-xs text-gray-500">
-          {psdDoc.width} x {psdDoc.height}
-        </span>
+        {psdDoc ? (
+          <>
+            <span className="max-w-[200px] truncate text-sm text-gray-300" title={psdDoc.fileName}>
+              {psdDoc.fileName}
+            </span>
+            <span className="text-xs text-gray-500">
+              {psdDoc.width} x {psdDoc.height}
+            </span>
+          </>
+        ) : (
+          <span className="text-sm text-gray-500">No file open</span>
+        )}
 
         <div className="flex-1" />
 
@@ -618,78 +555,126 @@ export default function App() {
           </span>
         </div>
 
+        {/* Open file */}
         <button
-          onClick={() => setShowLayers((s) => !s)}
-          className={`flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${
-            showLayers
-              ? 'bg-blue-600 text-white'
-              : 'text-gray-400 hover:bg-gray-800 hover:text-white'
-          }`}
-        >
-          <Layers size={14} />
-          Layers
-        </button>
-
-        <button
-          onClick={() => handleExport('png')}
+          onClick={() => fileInputRef.current?.click()}
           className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
         >
-          <Download size={14} />
-          PNG
+          <Upload size={14} />
+          Open PSD
         </button>
 
-        <button
-          onClick={() => handleExport('jpg')}
-          className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
-        >
-          <Download size={14} />
-          JPG
-        </button>
+        {psdDoc && (
+          <>
+            <button
+              onClick={() => setShowLayers((s) => !s)}
+              className={`flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                showLayers
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-400 hover:bg-gray-800 hover:text-white'
+              }`}
+            >
+              <Layers size={14} />
+              Layers
+            </button>
+
+            <button
+              onClick={() => handleExport('png')}
+              className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
+            >
+              <Download size={14} />
+              PNG
+            </button>
+
+            <button
+              onClick={() => handleExport('jpg')}
+              className="flex items-center gap-1.5 rounded px-2.5 py-1.5 text-xs font-medium text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
+            >
+              <Download size={14} />
+              JPG
+            </button>
+          </>
+        )}
       </header>
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Center: Canvas + Chat */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Canvas with zoom/pan */}
+          {/* Canvas area */}
           <div
             ref={canvasContainerRef}
             className="relative flex-1 overflow-hidden bg-gray-950"
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            style={{ cursor: isPanningRef.current ? 'grabbing' : 'default' }}
+            onMouseDown={psdDoc ? handleMouseDown : undefined}
+            onMouseMove={psdDoc ? handleMouseMove : undefined}
+            onMouseUp={psdDoc ? handleMouseUp : undefined}
+            onMouseLeave={psdDoc ? handleMouseUp : undefined}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            style={{ cursor: isPanningRef.current ? 'grabbing' : spaceHeldRef.current ? 'grab' : 'default' }}
           >
-            <div
-              className="absolute inset-0 flex items-center justify-center"
-              style={{
-                transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
-                transformOrigin: 'center center',
-              }}
-            >
-              <img
-                src={psdDoc.compositeDataUrl}
-                alt={`PSD composite: ${psdDoc.fileName}`}
-                className="max-h-full max-w-full object-contain select-none"
-                style={{ imageRendering: 'auto', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
-                draggable={false}
-              />
-            </div>
-            {/* Zoom controls */}
-            <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-lg bg-gray-900/80 px-2 py-1 backdrop-blur">
-              <button onClick={() => setZoom((z) => Math.max(z - 0.25, 0.1))} className="p-1 text-gray-400 hover:text-white">
-                <ZoomOut size={14} />
-              </button>
-              <span className="min-w-[3rem] text-center text-xs text-gray-400">{Math.round(zoom * 100)}%</span>
-              <button onClick={() => setZoom((z) => Math.min(z + 0.25, 5))} className="p-1 text-gray-400 hover:text-white">
-                <ZoomIn size={14} />
-              </button>
-              <button onClick={resetView} className="p-1 text-gray-400 hover:text-white" title="Reset view">
-                <Maximize size={14} />
-              </button>
-            </div>
+            {psdDoc ? (
+              <>
+                <div
+                  className="absolute inset-0 flex items-center justify-center"
+                  style={{
+                    transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                    transformOrigin: 'center center',
+                  }}
+                >
+                  <img
+                    src={psdDoc.compositeDataUrl}
+                    alt={`PSD composite: ${psdDoc.fileName}`}
+                    className="max-h-full max-w-full object-contain select-none"
+                    style={{ imageRendering: 'auto', boxShadow: '0 0 40px rgba(0,0,0,0.5)' }}
+                    draggable={false}
+                  />
+                </div>
+                {/* Zoom controls */}
+                <div className="absolute bottom-3 right-3 flex items-center gap-1 rounded-lg bg-gray-900/80 px-2 py-1 backdrop-blur">
+                  <button onClick={() => setZoom((z) => Math.max(z - 0.25, 0.1))} className="p-1 text-gray-400 hover:text-white">
+                    <ZoomOut size={14} />
+                  </button>
+                  <span className="min-w-[3rem] text-center text-xs text-gray-400">{Math.round(zoom * 100)}%</span>
+                  <button onClick={() => setZoom((z) => Math.min(z + 0.25, 5))} className="p-1 text-gray-400 hover:text-white">
+                    <ZoomIn size={14} />
+                  </button>
+                  <button onClick={resetView} className="p-1 text-gray-400 hover:text-white" title="Reset view">
+                    <Maximize size={14} />
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Empty state — drop zone */
+              <div
+                className="absolute inset-0 flex items-center justify-center"
+                onClick={() => fileInputRef.current?.click()}
+                style={{ cursor: 'pointer' }}
+              >
+                <div className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-12 py-16 transition-all ${
+                  dragOver
+                    ? 'border-blue-500 bg-blue-500/10'
+                    : 'border-gray-800 hover:border-gray-600'
+                }`}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 size={40} className="mb-3 animate-spin text-blue-500" />
+                      <p className="text-sm font-medium text-white">Parsing PSD...</p>
+                    </>
+                  ) : (
+                    <>
+                      <Upload size={40} className="mb-3 text-gray-600" />
+                      <p className="text-sm font-medium text-gray-300">Drop a PSD file or click to open</p>
+                      <p className="mt-1 text-xs text-gray-500">Accepts .psd files</p>
+                    </>
+                  )}
+                  {parseError && (
+                    <p className="mt-3 text-xs text-red-400">{parseError}</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Chat area */}
@@ -731,8 +716,8 @@ export default function App() {
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder='Describe an edit... e.g. "Change the headline to Summer Sale"'
-                disabled={!isConnected}
+                placeholder={psdDoc ? 'Describe an edit... e.g. "Change the headline to Summer Sale"' : 'Open a PSD file to start editing...'}
+                disabled={!isConnected || !psdDoc}
                 className="flex-1 rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm text-white placeholder-gray-500 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
               />
               <button
@@ -747,7 +732,7 @@ export default function App() {
         </div>
 
         {/* Right sidebar: Layers */}
-        {showLayers && (
+        {showLayers && psdDoc && (
           <aside className="flex w-[250px] shrink-0 flex-col border-l border-gray-800 bg-gray-900">
             <div className="flex h-10 items-center border-b border-gray-800 px-3">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
